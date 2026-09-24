@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}「第二意见」AI 恶意文件研判台{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <nav class="top">
+    <a href="/" class="{% if active == 'index' %}active{% endif %}">扫描</a>
+    <a href="/history" class="{% if active == 'history' %}active{% endif %}">历史</a>
+    <a href="/quarantine" class="{% if active == 'quarantine' %}active{% endif %}">隔离区</a>
+    <a href="/whitelist" class="{% if active == 'whitelist' %}active{% endif %}">白名单</a>
+    <span class="dim">｜本地服务，只绑 127.0.0.1</span>
+  </nav>
+  {% block body %}{% endblock %}
+  <footer class="foot">
+    判定与报告复用 CLI 同一套模块（scanner / report / disposition）·
+    上传文件只被<b>读取</b>，从不执行 · 样本落在状态目录的 <code>uploads/</code> 下并按 24h 定时清理
+  </footer>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

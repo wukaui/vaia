@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}扫描报告 · 「第二意见」AI 恶意文件研判台{% endblock %}
+{% block body %}
+  <h1>扫描报告</h1>
+  <div class="meta">
+    文件：<span class="rowfile">{{ job.file }}</span> ｜ 任务：<code>{{ job.job_id }}</code>
+    ｜ 状态：{{ job.status }}
+    ｜ 结论档位：{% if job.ai %}AI 档（含模型断言）{% else %}确定性判定（规则档，未调用模型）{% endif %}
+  </div>
+  {% if job.status == 'error' %}
+    <p class="error">扫描出错：{{ job.error }}</p>
+  {% elif job.report_url %}
+    <div class="toolbar">
+      <a href="/report/{{ job.job_id }}/raw" target="_blank">在新标签页打开原始报告 →</a>
+      <a href="/">← 回首页</a>
+    </div>
+    <div class="meta">下面是 <code>report.write_reports</code> 产出的 HTML 原样内嵌（同一套 CSS / 同一份聚合视图与证据溯源）</div>
+    <iframe class="report" src="/report/{{ job.job_id }}/raw" title="扫描报告"></iframe>
+  {% else %}
+    <p class="meta">报告还没生成（任务状态：{{ job.status }}）。<a href="/">回首页</a></p>
+  {% endif %}
+{% endblock %}

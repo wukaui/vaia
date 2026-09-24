@@ -1,0 +1,92 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+
+class RiskLevel(str, Enum):
+    clean = "clean"
+    suspicious = "suspicious"
+    malicious = "malicious"
+
+
+class Verdict(BaseModel):
+    """Agent 最终输出的结构化结论。"""
+
+    risk: RiskLevel
+    confidence: float = Field(ge=0.0, le=1.0, description="0-1 之间的置信度")
+    category: str = Field(default="unknown", description="如 trojan / downloader / macro / clean")
+    summary: str = Field(default="", description="一句话中文结论")
+    evidence: list[str] = Field(default_factory=list, description="来自工具调用的证据")
+    mitre: list[str] = Field(default_factory=list, description="可选的 ATT&CK 技术编号")
+    recommended_action: str = Field(default="review", description="isolate / review / ignore")
+    # 「AI 判决权」审计：策略/规则层想改判但**没有**改判时，把提议原样记在这里。
+    # 每条形如 {actor, proposed, from, to, basis, detail, applied: False, disagreement: True}。
+    # 判定由 AI 自主完成，这一栏只用于回答"规则到底同不同意 AI"。
+    policy_proposals: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class PreliminaryEvidence(BaseModel):
+    """规则预筛阶段的证据，会一起发给 Agent。"""
+
+    path: str
+    sha256: str
+    size: int
+    extension: str
+    prefilter_score: int
+    reasons: list[str] = Field(default_factory=list)
+    yara_hits: list[str] = Field(default_factory=list)
+    eicar: bool = False
+    known_bad_hash: bool = False
+    # 预筛层读不到内容时的**显式记账**（见 scanner.quick_prefilter）：
+    # 旧实现把 OSError 吞成 `head=b""`，各项都不加分 → 判 clean ——
+    # 「读不了 ≠ 安全」这条声明在预筛层被绕过（入口那层是判 suspicious+review 的）。
+    read_error: str = ""
+    # 确定性签名证据块（tools.signature_evidence），只从工具/Windows 验签来，不靠模型推断
+    signature: dict[str, Any] = Field(default_factory=dict)
+
+
+class FileReport(BaseModel):
+    path: str
+    sha256: str
+    size: int
+    extension: str
+    prefilter_score: int
+    prefilter_reasons: list[str] = Field(default_factory=list)
+    yara_hits: list[str] = Field(default_factory=list)
+    verdict: Verdict
+    agent_used: bool = False
+    agent_trace: list[dict[str, Any]] = Field(default_factory=list)
+    error: str | None = None
+    # 策略兜底审计：谁把谁抬到哪、依据是什么（每一条都可追溯）
+    policy_actions: list[dict[str, Any]] = Field(default_factory=list)
+    # 规则/策略与 AI 结论不一致、但未被采纳的提议（判决权归 AI 的审计面）
+    policy_proposals: list[dict[str, Any]] = Field(default_factory=list)
+    # 结论级证据来源：每条 evidence 对应哪个工具 + 原始输出片段
+    evidence_sources: list[dict[str, Any]] = Field(default_factory=list)
+    # 与确定性证据冲突 / 无工具支撑的断言（例如工具没报『无签名』却写『无签名』）
+    claim_warnings: list[str] = Field(default_factory=list)
+    # 处置状态：whitelisted / quarantined / quarantine_planned / previously_quarantined
+    disposition: dict[str, Any] = Field(default_factory=dict)
+    # 加壳信息：壳类型 / 判定证据 / 脱壳产物与其独立判定
+    packing: dict[str, Any] = Field(default_factory=dict)
+    # 多次采样：样本数 / 票型 / 一致性（用于量化判定稳定性）
+    sampling: dict[str, Any] = Field(default_factory=dict)
+    # 压缩包递归：类型 / 解包产物 / 内嵌样本判定 / 是否因限额截断
+    archive: dict[str, Any] = Field(default_factory=dict)
+    # 缓存命中信息（from_cache / cached_at）
+    cache: dict[str, Any] = Field(default_factory=dict)
+
+
+@dataclass
+class ScanDeps:
+    """Agent 运行期间的依赖对象，工具通过它访问当前文件。"""
+
+    file_path: Path
+    sha256: str
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    shell_history: list[str] = field(default_factory=list)

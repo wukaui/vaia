@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% set active = 'quarantine' %}
+{% block title %}隔离区 · 「第二意见」AI 恶意文件研判台{% endblock %}
+{% block body %}
+  <h1>隔离区</h1>
+  <div class="meta">读 <code>quarantine.json</code> + <code>quarantine/</code>（复用 <code>disposition.StateStore</code>）·
+    还原前会校验 sha256、且原路径已存在同名文件时拒绝覆盖</div>
+  {% if flash %}<div class="meta warn">{{ flash }}</div>{% endif %}
+  {% if not rows %}
+    <p class="meta">隔离区是空的。</p>
+  {% else %}
+  <div class="scroll-x">
+    <table>
+      <thead>
+        <tr><th>时间</th><th>文件</th><th>判定</th><th>类别</th><th>状态</th><th>sha256</th><th>动作</th></tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr id="row-{{ r.get('id') }}">
+          <td>{{ r.get('quarantined_at', '') }}</td>
+          <td class="rowfile">{{ r.get('name', '') }}</td>
+          <td><span class="badge {{ r.get('risk', 'na') }}">{{ r.get('risk', '') }}</span></td>
+          <td>{{ r.get('category', '') }}</td>
+          <td>{{ r.get('status', '') }}</td>
+          <td class="rowfile dim">{{ (r.get('sha256', '') or '')[:16] }}…</td>
+          <td>
+            {% if r.get('status') == 'quarantined' %}
+              <form method="post" action="/quarantine/{{ r.get('id') }}/restore"
+                    onsubmit="return confirm('确认把该文件还原到原路径？会先校验 sha256。')">
+                <button class="danger" type="submit">还原</button>
+              </form>
+            {% else %}
+              <span class="dim">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+{% endblock %}
+{# 还原走原生表单 + 服务端 303 回跳，**不依赖 JS**：本地工具，能在 curl/无 JS 环境下验收 #}

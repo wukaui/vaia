@@ -1,0 +1,6 @@
+# 本地恶意哈希库，每行一个 SHA256，支持 "hash,label" 格式。
+# EICAR 测试文件（无换行版本）
+275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f,EICAR_TEST_FILE
+
+# 把比赛用样本的 SHA256 粘贴到这里，例如：
+# 00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff,Emotet

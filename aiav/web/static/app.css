@@ -1,0 +1,68 @@
+/* 这是 report.py 里那套 CSS 的**原样搬用 + 少量页面级补充**，不是另起一套设计。
+   配色/字号/圆角/边框全部与 report.py 的 `_render_html` 保持一致：
+   #222 正文 / #fafafa 背景 / #666 次要文字 / #e0e0e0 表格线 / #f0f0f0 表头
+   #1565c0 主色 / #2e7d32 安全 / #ef6c00 可疑 / #c62828 恶意 / #b71c1c 告警 */
+body { font-family: "Segoe UI", Arial, "Microsoft YaHei", sans-serif; margin: 24px; color: #222; background: #fafafa; }
+h1 { margin-bottom: 4px; }
+h2 { margin: 22px 0 8px; font-size: 17px; }
+h3 { margin: 14px 0 6px; font-size: 14px; }
+a { color: #1565c0; }
+.meta { color: #666; font-size: 13px; }
+.cards { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0 8px; }
+.card { padding: 10px 16px; border-radius: 8px; background: #fff; border: 1px solid #e5e5e5; min-width: 96px; }
+.card span { display: block; font-size: 12px; color: #666; }
+.card b { font-size: 22px; }
+.panels { display: flex; flex-wrap: wrap; gap: 22px; }
+table { border-collapse: collapse; width: 100%; background: #fff; }
+th, td { border: 1px solid #e0e0e0; padding: 8px; vertical-align: top; text-align: left; font-size: 13px; }
+th { background: #f0f0f0; }
+table.mini { width: auto; min-width: 220px; }
+table.mini td { font-size: 12px; padding: 4px 8px; }
+code { word-break: break-all; font-size: 12px; }
+ul { margin: 4px 0; padding-left: 18px; }
+.badge { color: #fff; padding: 3px 8px; border-radius: 10px; font-size: 12px; }
+.badge.clean { background: #2e7d32; }
+.badge.suspicious { background: #ef6c00; }
+.badge.malicious { background: #c62828; }
+.badge.na { background: #999; }
+.error { color: #c62828; }
+.warn { color: #b71c1c; }
+.dim { color: #999; }
+.src { color: #666; font-size: 12px; }
+.disp { font-size: 11px; color: #555; word-break: break-all; margin-top: 4px; }
+details summary { cursor: pointer; font-size: 12px; color: #444; }
+.toolbar { display: flex; gap: 8px; align-items: center; margin: 10px 0; flex-wrap: wrap; }
+.toolbar input { padding: 6px 10px; border: 1px solid #ccc; border-radius: 6px; min-width: 260px; }
+.toolbar button { padding: 6px 12px; border: 1px solid #ccc; background: #fff; border-radius: 6px; cursor: pointer; }
+.toolbar button.on { background: #1565c0; color: #fff; border-color: #1565c0; }
+
+/* ---- Web 层补充（只加"页面外壳"需要的东西，不改上面的观感） ---- */
+nav.top { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 0 0 6px; font-size: 14px; }
+nav.top a { text-decoration: none; }
+nav.top a.active { font-weight: 600; border-bottom: 2px solid #1565c0; }
+.drop { border: 2px dashed #ccc; border-radius: 10px; background: #fff; padding: 28px 18px;
+        text-align: center; color: #666; cursor: pointer; margin: 12px 0; }
+.drop.hot { border-color: #1565c0; background: #f3f8ff; color: #1565c0; }
+.drop strong { color: #222; }
+.scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+footer.foot { margin-top: 26px; color: #999; font-size: 12px; }
+iframe.report { width: 100%; min-height: 70vh; border: 1px solid #e0e0e0; border-radius: 8px; background: #fff; }
+button.primary { background: #1565c0; color: #fff; border-color: #1565c0; }
+button.danger { background: #c62828; color: #fff; border-color: #c62828; }
+.rowfile { font-family: Consolas, Menlo, monospace; font-size: 12px; }
+#log { margin: 8px 0 0; font-family: Consolas, Menlo, monospace; font-size: 12px; color: #444;
+       white-space: pre-wrap; word-break: break-all; }
+
+/* 手机宽度：字号收紧、内边距变小，表格由 .scroll-x 横向滚动，页面不溢出。
+   断点写 520px：headless chrome 的窗口最小只有 500px（截图工具的硬限制），
+   断点取 420 的话"手机截图"根本触发不到这套规则；520 让 420 及以下**和**验证用的
+   500px 视口都走手机版，方向是把手机版做得更宽松，不是把手机版砍掉。 */
+@media (max-width: 520px) {
+  body { margin: 12px; }
+  h1 { font-size: 19px; }
+  .card { min-width: 76px; padding: 8px 12px; }
+  .card b { font-size: 18px; }
+  th, td { padding: 6px; font-size: 12px; }
+  .toolbar input { min-width: 0; flex: 1 1 140px; }
+  iframe.report { min-height: 60vh; }
+}

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% set active = 'history' %}
+{% block title %}扫描历史 · 「第二意见」AI 恶意文件研判台{% endblock %}
+{% block body %}
+  <h1>扫描历史</h1>
+  <div class="meta">读 <code>history.jsonl</code>（与 CLI 共用同一个 <code>StateStore</code>）· 最新在前 · 显示最近 {{ limit }} 条</div>
+  {% if not rows %}
+    <p class="meta">还没有历史记录。</p>
+  {% else %}
+  <div class="scroll-x">
+    <table>
+      <thead>
+        <tr><th>时间</th><th>来源</th><th>总数</th><th>安全</th><th>可疑</th><th>恶意</th><th>走 AI</th><th>报告</th></tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.get('recorded_at', '') }}</td>
+          <td class="rowfile">{{ r.get('scan_dir', '') }}</td>
+          <td>{{ r.get('total', '') }}</td>
+          <td>{{ r.get('clean', '') }}</td>
+          <td>{{ r.get('suspicious', '') }}</td>
+          <td>{{ r.get('malicious', '') }}</td>
+          <td>{% if r.get('agent_used') %}是（{{ r.get('agent_used') }} 个）{% else %}否（规则档）{% endif %}</td>
+          <td>
+            {% if r.get('source') == 'web' and r.get('job_id') %}
+              <a href="/report/{{ r.get('job_id') }}">报告</a>
+            {% else %}
+              <span class="dim">CLI 产物</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# 密钥永远不进仓库
+.env
+.env.bak*
+.env.local
+!.env.example
+
+# 扫描产物（CLI 默认输出目录）
+/reports/
+
+# 外部大语料：capa 规则与签名按需拉取（见 README「可选：capa 数据」）
+# 不带斜杠：同时匹配目录与指向别处的软链
+/third_party
+
+# 样本本体与杂项
+samples/
+*.log
+.DS_Store

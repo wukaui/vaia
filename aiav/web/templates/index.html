@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% set active = 'index' %}
+{% block body %}
+  <h1>「第二意见」AI 恶意文件研判台</h1>
+  <div class="meta">本地 Web UI（阶段一）· 上传单个文件 → 规则档确定性判定 → 生成与 CLI 完全一致的报告</div>
+  <div class="meta">AI 判决档：{% if ai_enabled %}<b>已开启</b>（走模型，有 token 上限）{% else %}<b>关闭</b>（确定性判定·规则档，未调用模型）{% endif %}
+    ｜单并发：同一时刻只跑一个任务，队列满返回 429</div>
+
+  <div class="drop" id="drop">
+    <strong>把文件拖到这里</strong>，或点击选择（单文件，上限 {{ max_upload_mb }}MB）
+    <div class="meta" id="picked">还没有选择文件</div>
+  </div>
+  <input type="file" id="file" hidden>
+  <div class="toolbar">
+    <button class="primary" id="go" disabled>开始扫描</button>
+    <button id="reset">清空</button>
+    <span class="meta" id="state"></span>
+  </div>
+
+  <h2>结果</h2>
+  <div id="result" class="meta">还没有任务。</div>
+  <pre id="log" hidden></pre>
+{% endblock %}
+{% block scripts %}<script src="/static/app.js"></script>{% endblock %}

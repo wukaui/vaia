@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>layout selfcheck</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <h1>layout selfcheck</h1>
+  <div class="meta">这个页面只做一件事：把"有没有横向溢出"量出来，供截图脚本断言。不是给用户看的页面。</div>
+  <div class="scroll-x" id="host"></div>
+  <pre id="out">measuring…</pre>
+  <script>
+  (async function () {
+    const targets = ['/', '/history', '/quarantine', '/whitelist'];
+    const results = [];
+    for (const path of targets) {
+      const r = await fetch(path).then(x => x.text()).catch(() => '');
+      results.push({ path: path, fetched: r.length > 0 });
+    }
+    // 当前文档自身的溢出测量（调用方用 ?path=/history 之类把目标页面套进 iframe 更准；
+    // 这里给的是"本页 + 各页面能取到"的粗测，真正逐页测量由截图脚本对各页各自跑一次）
+    const de = document.documentElement;
+    const payload = {
+      inner: window.innerWidth,
+      dpr: window.devicePixelRatio,
+      scrollWidth: de.scrollWidth,
+      clientWidth: de.clientWidth,
+      overflowPx: de.scrollWidth - de.clientWidth,
+      pagesReachable: results,
+      tables: Array.prototype.map.call(document.querySelectorAll('table'), function (t) {
+        const box = t.closest('.scroll-x') || t.parentElement;
+        return {
+          tableWidth: Math.round(t.getBoundingClientRect().width),
+          boxWidth: Math.round(box.getBoundingClientRect().width),
+          boxIsScrollX: box.classList.contains('scroll-x'),
+          boxCanScroll: box.scrollWidth > box.clientWidth
+        };
+      })
+    };
+    document.getElementById('out').textContent = 'LAYOUT_JSON:' + JSON.stringify(payload);
+  })();
+  </script>
+</body>
+</html>

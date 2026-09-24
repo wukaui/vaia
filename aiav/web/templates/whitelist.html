@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% set active = 'whitelist' %}
+{% block title %}白名单 · 「第二意见」AI 恶意文件研判台{% endblock %}
+{% block body %}
+  <h1>白名单</h1>
+  <div class="meta">按 sha256 命中后跳过 AI 判定与可疑告警（与 CLI 共用 <code>whitelist.json</code>）·
+    本页只读，增删走 CLI，避免误操作把恶意文件洗白</div>
+  {% if not rows %}
+    <p class="meta">白名单是空的。</p>
+  {% else %}
+  <div class="scroll-x">
+    <table>
+      <thead><tr><th>加入时间</th><th>sha256</th><th>路径</th><th>原因</th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.get('added_at', '') }}</td>
+          <td class="rowfile">{{ r.get('sha256', '') }}</td>
+          <td class="rowfile">{{ r.get('path', '') }}</td>
+          <td>{{ r.get('reason', '') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+{% endblock %}

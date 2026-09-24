@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aiav"
+version = "0.1.0"
+description = "「第二意见」AI 恶意文件研判台 —— 只读、可解释、可回滚的恶意文件研判流水线"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+
+# 运行期必装：只覆盖 CLI 扫描链路。装完 `aiav scan <路径>` 即可用。
+dependencies = [
+    "pydantic-ai-slim[openai]>=2.9,<3",
+    "pydantic>=2.7",
+    "typer>=0.12",
+    "rich>=13",
+    "python-dotenv>=1.0",
+    "httpx>=0.27",
+    "pefile>=2024.8.26",
+    "yara-python>=4.5",
+    "oletools>=0.60",
+    "pypdf>=4.0",
+]
+
+[project.optional-dependencies]
+# 本地 Web UI（纯 Python，无前端构建链）
+web = [
+    "fastapi>=0.110",
+    "uvicorn>=0.30",
+    "jinja2>=3.1",
+    "python-multipart>=0.0.9",
+]
+# 可选的高星静态分析工具（不在 PATH 里时相关工具会优雅降级）
+static = [
+    "flare-capa",
+    "flare-floss",
+]
+dev = [
+    "pytest>=8",
+]
+
+[project.scripts]
+aiav = "aiav.cli:app"
+
+[tool.setuptools.packages.find]
+include = ["aiav*"]
+
+[tool.setuptools.package-data]
+aiav = [
+    "data/rules/*.yar",
+    "data/rules/*.yara",
+    "data/known_bad_hashes.txt",
+    "web/templates/*.html",
+    "web/static/*",
+]
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py"]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: 需要真实 LLM API Key 的测试",
+]
