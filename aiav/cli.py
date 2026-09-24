@@ -168,7 +168,7 @@ def scan(
             "max_size_mb": max_size_mb,
             "include_system": include_system,
         }
-    json_path, html_path = write_reports(reports, output, extra=extra or None)
+    json_path, html_path, audit_path = write_reports(reports, output, extra=extra or None)
 
     # ---------------- 处置闭环 ----------------
     target_risk = quarantine.strip().lower()
@@ -243,6 +243,7 @@ def scan(
 
     console.print(f"JSON 报告: [bold]{json_path}[/bold]")
     console.print(f"HTML 报告: [bold]{html_path}[/bold]")
+    console.print(f"审计全文: [bold]{audit_path}[/bold] [dim]（工具调用链 + 证据原始片段）[/dim]")
 
 
 

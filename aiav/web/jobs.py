@@ -266,10 +266,11 @@ class JobManager:
 
         extra = {"token_budget": budget.as_dict()} if budget is not None else None
         extra = {**(extra or {}), "web_job_id": job.job_id, "ai_enabled": job.ai}
-        json_path, html_path = write_reports(reports, report_dir, extra=extra)
+        json_path, html_path, audit_path = write_reports(reports, report_dir, extra=extra)
         # 固定文件名，便于 `GET /report/<job_id>/raw` 在进程重启后仍按 job_id 找到报告
         html_path = _rename_report(html_path, report_dir / "scan.html")
         json_path = _rename_report(json_path, report_dir / "scan.json")
+        _rename_report(audit_path, report_dir / "scan.audit.json")
 
         summary = {
             "total": len(reports),

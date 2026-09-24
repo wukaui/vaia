@@ -167,15 +167,27 @@ def build_summary(reports: list[FileReport]) -> dict[str, Any]:
     }
 
 
+# 报告分层：**判定结果与审计全文分两卷写**。
+# 逐文件的 `agent_trace`（工具调用链）与 `evidence_sources`（证据原始片段）
+# 实测占 JSON 的 ~64%，属于"要能核对"的审计材料，不是"要读"的判定材料 ——
+# 混在一个文件里会让主报告读不动。拆开后主卷只剩判定与聚合，审计卷一字不少。
+AUDIT_ONLY_FIELDS = ("agent_trace", "evidence_sources")
+
+
 def write_reports(reports: list[FileReport], output_dir: Path,
-                  extra: dict[str, Any] | None = None) -> tuple[Path, Path]:
+                  extra: dict[str, Any] | None = None) -> tuple[Path, Path, Path]:
+    """写三份产物：`scan_*.json`（判定）/ `scan_*.html`（阅读）/ `scan_*.audit.json`（审计全文）。"""
     output_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     json_path = output_dir / f"scan_{stamp}.json"
+    audit_path = output_dir / f"scan_{stamp}.audit.json"
     html_path = output_dir / f"scan_{stamp}.html"
 
     summary = build_summary(reports)
+    full_reports = [r.model_dump(mode="json") for r in reports]
+    light_reports = [{k: v for k, v in item.items() if k not in AUDIT_ONLY_FIELDS}
+                     for item in full_reports]
     json_payload = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "total": len(reports),
@@ -201,13 +213,23 @@ def write_reports(reports: list[FileReport], output_dir: Path,
         "attribution_by_file": {
             str(r.path): attribution_stats(r) for r in reports
         },
-        "reports": [r.model_dump(mode="json") for r in reports],
+        "reports": light_reports,
+        # 审计全文在同名 `*.audit.json`：逐文件工具调用链 + 证据原始片段
+        "audit_file": audit_path.name,
         **(extra or {}),
+    }
+    audit_payload = {
+        "generated_at": json_payload["generated_at"],
+        "total": len(reports),
+        "note": "审计全文：逐文件 Agent 工具调用链与证据来源原始片段。判定结果见同名 scan_*.json。",
+        "attribution_by_file": json_payload["attribution_by_file"],
+        "reports": full_reports,
     }
 
     json_path.write_text(json.dumps(json_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    audit_path.write_text(json.dumps(audit_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     html_path.write_text(_render_html(reports, summary), encoding="utf-8")
-    return json_path, html_path
+    return json_path, html_path, audit_path
 
 
 SUPPORTED_SUPPORT = ("explicit", "overlap")
@@ -273,7 +295,8 @@ def _file_row(r: FileReport, index: int) -> str:
         )
         trace_html = _details("Agent 工具调用链", f"<ul>{items}</ul>")
 
-    # 证据：每条结论底下直接挂它的来源（工具名 + 原始输出片段）
+    # 证据：每条结论挂它的来源（工具名 + 支撑类型）。**原始片段不在这里展开** ——
+    # 逐文件行里再贴几百字原文，一屏就全是代码块；全量片段统一进下面那个默认收起的折叠区。
     src_by_claim = {str(s.get("claim")): s for s in (r.evidence_sources or [])}
     evidence_items = []
     for e in r.verdict.evidence:
@@ -281,12 +304,9 @@ def _file_row(r: FileReport, index: int) -> str:
         if src:
             support = src.get("support")
             cls = "" if support in ("explicit", "overlap") else " class='warn'"
-            excerpt = _esc((src.get("raw_excerpt") or "")[:400])
             evidence_items.append(
                 f"<li{cls}>{_esc(e)}<br><span class='src'>↳ 来源: {_esc(src.get('source'))}"
-                f"（{_esc(support)}）</span>"
-                + (f"<br><code>{excerpt}</code>" if excerpt else "")
-                + "</li>")
+                f"（{_esc(support)}）</span></li>")
         else:
             evidence_items.append(f"<li>{_esc(e)}</li>")
     evidence_html = f"<ul>{''.join(evidence_items)}</ul>"
@@ -298,11 +318,11 @@ def _file_row(r: FileReport, index: int) -> str:
             cls = "" if support in ("explicit", "overlap") else " class='warn'"
             src_items.append(
                 f"<li{cls}>[{_esc(item.get('source'))} / {_esc(support)}] {_esc(item.get('claim'))}"
-                + (f"<br><code>{_esc((item.get('raw_excerpt') or '')[:300])}</code>"
+                + (f"<br><code>{_esc((item.get('raw_excerpt') or '')[:200])}</code>"
                    if item.get("raw_excerpt") else "")
                 + "</li>")
-        sources_html = _details("结论证据来源（工具名 + 原始输出片段）",
-                               f"<ul>{''.join(src_items)}</ul>", open_=True)
+        sources_html = _details(f"结论证据来源 {len(src_items)} 条（工具名 + 原始输出片段）",
+                                f"<ul>{''.join(src_items)}</ul>")
     else:
         sources_html = ""
 
@@ -526,9 +546,11 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
   <div class="meta">扫描报告（AI AV Agent）</div>
   <div class="meta">生成时间：{_esc(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))} ｜ 文件数：{total}
    ｜ 每条结论都标注证据来源（工具名 + 原始输出片段），可展开核对</div>
-  <div class="meta">口径：「结论有出处率」只在 <b>AI 研判过的文件</b>（上卡「AI 研判 {summary['agent_used']}」）上统计
-   —— 未走 AI 的文件是确定性判定（规则 / 哈希 / 低分放行），没有模型断言，不进这个分母；
-   没走 AI 的结论标 <code>确定性判定</code>，不走 AI 的批次出处率显示 <b>N/A</b>（不是 0%）。</div>
+  {_details("统计口径说明（出处率为什么是 N/A）",
+            "<p>「结论有出处率」只在 <b>AI 研判过的文件</b>（上卡「AI 研判 "
+            f"{summary['agent_used']}」）上统计 —— 未走 AI 的文件是确定性判定"
+            "（规则 / 哈希 / 低分放行），没有模型断言，不进这个分母；没走 AI 的结论标 "
+            "<code>确定性判定</code>，不走 AI 的批次出处率显示 <b>N/A</b>（不是 0%）。</p>")}
 
   <div class="cards">
     {_card("总数", total)}
@@ -545,30 +567,22 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
   {warnings_block}
 
   <h2>聚合视图</h2>
-  <div class="meta">三维聚合（判定 / 文件类型 / 家族）：点击任意一行可按该值筛选下方明细；点表头排序。
-    占比与失败率都以本批文件总数为分母。</div>
+  <div class="meta">点击任意一行可按该值筛选下方明细；点表头排序。</div>
   <div class="panels">
     {_dimension_table("判定", "risk", summary["dimensions"]["risk"])}
     {_dimension_table("文件类型", "extension", summary["dimensions"]["extension"])}
-    {_dimension_table("家族（判定类别）", "category", summary["dimensions"]["category"])}
   </div>
-  <div class="panels">
-    <div>
-      {_kv_table("按扩展名", summary["by_extension"])}
-      {_kv_table("按预筛分档", summary["by_score_band"])}
-      {_kv_table("处置状态", summary["disposition"])}
-    </div>
-    <div>
-      {_kv_table("按类别", summary["by_category"])}
-      {_kv_table("YARA 命中 TOP", summary["yara_top"])}
-      {_kv_table("策略动作", summary["policy_actions"])}
-    </div>
-    <div>
-      {_kv_table("证据溯源", trace_table)}
-      {_kv_table("加壳处理", pack_table)}
-      {_kv_table("载荷判定", summary["packing"]["payload_verdicts"])}
-    </div>
-  </div>
+  {_details("更多聚合（家族 / 预筛分档 / 处置 / YARA / 策略 / 溯源 / 加壳）",
+            "<div class='panels'>"
+            + _dimension_table("家族（判定类别）", "category", summary["dimensions"]["category"])
+            + "<div>" + _kv_table("按预筛分档", summary["by_score_band"])
+            + _kv_table("处置状态", summary["disposition"])
+            + _kv_table("YARA 命中 TOP", summary["yara_top"]) + "</div>"
+            + "<div>" + _kv_table("策略动作", summary["policy_actions"])
+            + _kv_table("证据溯源", trace_table)
+            + _kv_table("加壳处理", pack_table)
+            + _kv_table("载荷判定", summary["packing"]["payload_verdicts"]) + "</div>"
+            + "</div>")}
 
   <h2>逐文件结果</h2>
   <div class="toolbar">
