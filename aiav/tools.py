@@ -429,22 +429,68 @@ def yara_match_details(path: Path) -> list[dict[str, Any]]:
 # 这两件事必须分开告诉 AI —— 否则它会把"缺上下文"读成"没风险"
 # （对照 beenuar/AiSOC 的教训：Saying nothing here would let the model read
 #   absence of context as absence of risk）。
+def _user_data_root() -> Path:
+    """跨平台用户数据目录 —— pip 装出来的包找不到项目根时的落点。"""
+    if sys.platform == "win32":
+        base = os.getenv("LOCALAPPDATA") or os.getenv("APPDATA")
+        if base:
+            return Path(base) / "aiav"
+    base = os.getenv("XDG_DATA_HOME", "").strip()
+    if base:
+        return Path(base) / "aiav"
+    return Path.home() / ".local" / "share" / "aiav"
+
+
+def capa_data_root() -> Path:
+    """capa 外部语料（规则集 + 签名集）的根目录。`CAPA_DATA` 可覆盖。
+
+    ⚠️ 不能只认 `<项目根>/third_party`：pip 装出来的包里
+    `Path(__file__).parent.parent` 是 **site-packages**，那里永远不会有 third_party/ ——
+    实测干净 venv 里 `pip install aiav` 之后，即使把规则集放在手边，
+    `capa_ready()` 也一律返回 False，capa 就这么"可选"地消失了。
+    所以源码运行用仓库，装出来的包用用户数据目录。
+    """
+    override = os.getenv("CAPA_DATA", "").strip()
+    if override:
+        return Path(override)
+    if (PROJECT_ROOT / "pyproject.toml").is_file():
+        return PROJECT_ROOT / "third_party"
+    return _user_data_root()
+
+
+def _pick_capa_dir(env_var: str, name: str) -> Path:
+    """挑一个**真的有内容**的 capa 语料目录；都没有就返回默认落点（供报错信息指路）。"""
+    override = os.getenv(env_var, "").strip()
+    if override:
+        return Path(override)
+    target = capa_data_root() / name
+    for cand in (target, _user_data_root() / name, PROJECT_ROOT / "third_party" / name):
+        if cand.is_dir() and any(cand.iterdir()):
+            return cand
+    return target
+
+
 def capa_rules_dir() -> Path:
-    """capa 规则集目录。`CAPA_RULES` 可覆盖，默认 `<项目根>/third_party/capa-rules`。
+    """capa 规则集目录。`CAPA_RULES` 可覆盖，默认 `<capa_data_root()>/capa-rules`。
 
     ⚠️ **pip 装的 capa 不自带规则**（实测 `flare-capa` 9.4.0：包内 `capa/rules/`
     是空目录、`capa/sigs/` 根本不存在，直接跑会报
     "default embedded rules not found! (maybe you installed capa as a library?)" 并退出码 10）。
-    所以规则必须另外准备，见 README。找不到规则时**不该把 capa_scan 暴露给 AI** ——
+    规则由 `aiav capa-setup` 拉取（见 README）。找不到规则时**不该把 capa_scan 暴露给 AI** ——
     否则每次调用都必然拿回一句 error，白烧一次往返（实测第一轮就是这样：63 个文件
     里 capa_scan 被调 22 次，全是 "not installed"）。
     """
-    return Path(os.getenv("CAPA_RULES", str(PROJECT_ROOT / "third_party" / "capa-rules")))
+    return _pick_capa_dir("CAPA_RULES", "capa-rules")
 
 
 def capa_sigs_dir() -> Path:
-    """capa 签名集目录（`CAPA_SIGS` 可覆盖）。同样是 pip 包不自带的外部语料。"""
-    return Path(os.getenv("CAPA_SIGS", str(PROJECT_ROOT / "third_party" / "capa-sigs")))
+    """capa 签名集目录（`CAPA_SIGS` 可覆盖）。同样是 pip 包不自带的外部语料。
+
+    v9.4.0 有 3 个 `.sig`（共约 15MB）。**少一个不会报错，但会静默少认一批编译器签名** ——
+    实测 `~/ai-av-cli/third_party/capa-sigs` 只拉了 1 个（4.6MB），
+    另两个（atlmfc / common_libs）从来没到位过。
+    """
+    return _pick_capa_dir("CAPA_SIGS", "capa-sigs")
 
 
 def capa_ready() -> tuple[bool, str]:
@@ -464,13 +510,13 @@ def capa_ready() -> tuple[bool, str]:
     if not rules.is_dir() or not any(rules.iterdir()):
         return False, (
             f"已装但缺少规则集（{rules} 不存在或为空；pip 装的 capa 不自带规则，"
-            "需另配 CAPA_RULES，见 README）"
+            "跑 `aiav capa-setup` 拉取）"
         )
     sigs = capa_sigs_dir()
     if not sigs.is_dir() or not any(sigs.iterdir()):
         return False, (
             f"已装但缺少签名集（{sigs} 不存在或为空；capa 没有签名集会直接报错退出，"
-            "需另配 CAPA_SIGS，见 README）"
+            "跑 `aiav capa-setup` 拉取）"
         )
     return True, ""
 
@@ -1602,7 +1648,12 @@ def floss_scan(ctx: RunContext[ScanDeps]) -> str:
                 "stack_count": len(stack),
                 "tight_count": len(tight),
                 "interesting_strings": interesting[:80],
-                "stderr": (proc.stderr or "")[:500],
+                # ⚠️ 必须 `_decode_output`：`proc.stderr` 是 **bytes**，直接塞进 result 会让
+                # 下面那句 `json.dumps` 抛 TypeError("Object of type bytes is not JSON
+                # serializable")，异常从工具里冒出去 → 整轮 Agent 调用失败 →
+                # scanner 静默降级到规则判定 → 7 个恶意 PE 被判 clean。
+                # 只在 floss 往 stderr 写了警告时触发（空 stderr 因为 `b"" or ""` 是 str，看不出来）。
+                "stderr": _decode_output(proc.stderr or b"")[:500],
             }
     except subprocess.TimeoutExpired:
         result = {"error": "FLOSS timeout"}

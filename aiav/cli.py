@@ -11,6 +11,7 @@ from rich.table import Table
 
 from aiav.agent import build_agent
 from aiav.budget import budget_from_env
+from aiav.capa_data import capa_ready_or_note
 from aiav.disposition import QUARANTINE_RISKS, StateStore, default_store
 from aiav.models import RiskLevel
 from aiav.report import write_reports
@@ -84,6 +85,14 @@ def scan(
             console.print(f"[green]AI Agent 已启用：{model or 'AGENT_MODEL'}[/green]")
         except Exception as exc:
             console.print(f"[yellow]AI Agent 未启用，降级为规则扫描：{exc}[/yellow]")
+
+    # capa 是必装工具：缺了它，能力识别与 ATT&CK 映射整块消失，AI 只能写"capa 不可用"。
+    # 实测代价：63 文件基准跑完，capa_scan 一次都没被调用过（环境里根本没装）。
+    # 所以缺失要在扫描**开始**就吼一声，而不是安静地少一个工具。
+    if agent is not None:
+        capa_note = capa_ready_or_note()
+        if capa_note:
+            console.print(f"[yellow]{capa_note} 修复：`aiav capa-setup`[/yellow]")
 
     # 状态目录要在扫描前确定：白名单判定发生在 scan_file 内部，必须用同一个 store，
     # 否则 --state-dir 只影响处置、却让"加白名单免扫"仍然走默认目录（实测踩过）。
@@ -375,6 +384,49 @@ def history_cmd(
                       str(e.get("agent_used", "-")),
                       f"{e.get('quarantine_mode', 'off')}{'(已执行)' if e.get('quarantine_applied') else ''}")
     console.print(table)
+
+
+@app.command("tools")
+def tools_cmd() -> None:
+    """列出全部工具与检测项的本机状态 —— 哪些会交给 AI，哪些根本没跑。"""
+    from aiav.capa_data import status as capa_status
+    from aiav.tools import ALL_TOOLS, available_tools, unavailable_detections
+
+    live = {t.__name__ for t in available_tools()}
+    table = Table(title="工具表（按本机环境过滤后的真实状态）")
+    table.add_column("工具")
+    table.add_column("交给 AI")
+    table.add_column("说明")
+    for t in ALL_TOOLS:
+        doc = (t.__doc__ or "").strip().splitlines()
+        table.add_row(
+            t.__name__,
+            "[green]是[/green]" if t.__name__ in live else "[red]否[/red]",
+            doc[0] if doc else "",
+        )
+    console.print(table)
+
+    ok, line = capa_status()
+    console.print(("[green]" if ok else "[red]") + line + "[/]")
+    missing = unavailable_detections()
+    if missing:
+        console.print("[yellow]未执行的检测（不是「跑了没问题」，是「没跑」）：[/yellow]")
+        for item in missing:
+            console.print(f"  · {item}")
+
+
+@app.command("capa-setup")
+def capa_setup(
+    version: str | None = typer.Option(None, "--version", help="capa 版本号，默认取本机 capa 二进制"),
+    force: bool = typer.Option(False, "--force", help="已有的语料也重下"),
+) -> None:
+    """拉取 capa 的规则集与签名集（必装语料，pip 包不自带）。"""
+    from aiav.capa_data import fetch
+
+    ok, message = fetch(version=version, force=force)
+    console.print(("[green]✓ " if ok else "[red]✗ ") + message + "[/]")
+    if not ok:
+        raise typer.Exit(code=1)
 
 
 # 说明：`compute_sha256` 直接由上面 `from aiav.scanner import ...` 引入，与 `aiav.scanner` 里是

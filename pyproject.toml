@@ -26,6 +26,12 @@ dependencies = [
     # 旧实现走 powershell.exe 验签会把样本递给 Defender，实测被吃掉 21 个。
     "asn1crypto>=1.5",
     "cryptography>=42",
+    # 静态分析主力工具，**不是可选项**：capa 出能力识别与 ATT&CK 映射，floss 出解混淆字符串。
+    # 实测把它们放进 optional extra 的代价：63 文件基准跑完，capa_scan / floss_scan
+    # 一次都没被调用过（环境里根本没装），AI 只能在结论里写"capa/FLOSS 均不可用"。
+    # 工具是可选的，AI 的研判就不是完整的。
+    "flare-capa>=9.4",
+    "flare-floss>=3.1",
 ]
 
 [project.optional-dependencies]
@@ -35,11 +41,6 @@ web = [
     "uvicorn>=0.30",
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
-]
-# 可选的高星静态分析工具（不在 PATH 里时相关工具会优雅降级）
-static = [
-    "flare-capa",
-    "flare-floss",
 ]
 dev = [
     "pytest>=8",
