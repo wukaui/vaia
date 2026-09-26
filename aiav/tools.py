@@ -127,8 +127,75 @@ HIGH_RISK_EXTENSIONS = {
 }
 
 
+RECORD_MAX_CHARS = int(os.getenv("AI_AV_RECORD_MAX_CHARS", "2000"))
+
+
+def _shrink_json(value: Any, budget: int) -> Any:
+    """递归裁剪 JSON 结构：优先砍长列表、再砍长字符串，不砍掉字段本身。
+
+    这样裁完仍是**合法 JSON 且字段齐全**，读报告的人能看出"这个列表被截了"，
+    而不是面对一个腰斩的字符串。
+    """
+    if isinstance(value, dict):
+        return {k: _shrink_json(v, budget) for k, v in value.items()}
+    if isinstance(value, list):
+        out: list[Any] = []
+        used = 0
+        for item in value:
+            piece = _shrink_json(item, max(64, budget // 2))
+            size = len(json.dumps(piece, ensure_ascii=False))
+            if used + size > budget and out:
+                out.append(f"…[此处省略 {len(value) - len(out)} 项]")
+                break
+            out.append(piece)
+            used += size
+        return out
+    if isinstance(value, str) and len(value) > budget:
+        return value[:budget] + f"…[字符串截断，原长 {len(value)}]"
+    return value
+
+
+def _cap_for_record(summary: str, limit: int | None = None) -> str:
+    """审计存档用的截断：**结构化裁剪 + 显式标注**，绝不裸切 JSON 字符串。
+
+    旧实现是 `summary[:2000]` —— 对 `json.dumps` 的结果裸切字符串，结果存档里
+    13/65 条工具输出是**非法 JSON**（尾部字符串被腰斩）。而且它是静默的：
+    读报告的人分不清"工具只返回了这些"和"这里被截了"。
+    （对照 IntelOwl 的做法：a truncated list is never silent。）
+
+    注意：这里截的只是**审计存档副本**，返回给 AI 的是各工具自己的 `summary[:N]`。
+    """
+    limit = limit or RECORD_MAX_CHARS
+    if len(summary) <= limit:
+        return summary
+    try:
+        data = json.loads(summary)
+    except Exception:  # noqa: BLE001 - 非 JSON（少数工具返回纯文本）
+        head = limit // 2
+        return (summary[:head]
+                + f"\n…[审计存档截断：完整输出 {len(summary)} 字符，此处留头尾]…\n"
+                + summary[-(limit - head):])
+    shrunk = json.dumps(_shrink_json(data, limit), ensure_ascii=False)
+    if len(shrunk) > limit:
+        # 收紧预算再来一轮（列表项数会进一步减少）
+        shrunk = json.dumps(_shrink_json(data, max(64, limit // 3)), ensure_ascii=False)
+    if len(shrunk) > limit:
+        # 最后兜底：**包成合法 JSON 信封**，别裸切字符串 ——
+        # 裸切会让存档变成非法 JSON，读报告的人只能看到一段腰斩的文本。
+        shrunk = json.dumps(
+            {
+                "_truncated": True,
+                "_original_chars": len(summary),
+                "_note": f"结构裁剪后仍超出存档上限 {limit} 字符，仅保留片段",
+                "_preview": shrunk[: max(0, limit - 200)],
+            },
+            ensure_ascii=False,
+        )
+    return shrunk
+
+
 def _record(ctx: RunContext[ScanDeps], tool_name: str, summary: str) -> None:
-    ctx.deps.tool_calls.append({"tool": tool_name, "summary": summary[:2000]})
+    ctx.deps.tool_calls.append({"tool": tool_name, "summary": _cap_for_record(summary)})
 
 
 def _decode_output(data: bytes) -> str:
@@ -216,7 +283,7 @@ def load_yara_rules() -> Any | None:
 
 
 def run_yara(path: Path) -> list[str]:
-    """给预筛和 Agent 工具共用的 YARA 包装。"""
+    """给预筛用的 YARA 包装：**只要规则名**（预筛只拿它算分）。"""
     rules = load_yara_rules()
     if rules is None:
         return []
@@ -225,6 +292,125 @@ def run_yara(path: Path) -> list[str]:
     except Exception:
         return []
     return [m.rule for m in matches]
+
+
+# =========================
+# YARA 命中详情（送 AI 的证据，不是结论）
+# =========================
+# 为什么有这个东西（2026-09-26 审查结论）：
+#   旧设计把 YARA 结果做成 `yara_scan` 工具，返回 `strong_hits` / `weak_hits` 两档 ——
+#   那个分档是**本模块自己硬编码的判定口径**（WEAK_YARA_RULES），既不是 YARA 引擎给的，
+#   也不是规则作者声明的。而 YARA 引擎真正算出来的东西（命中在哪个偏移、命中了什么字节）
+#   和规则作者真正声明的东西（severity / tuning / benign_expectation）**全被扔了**。
+#   结果 AI 拿到一个光秃秃的规则名 + 一份别人的加权口径，只能复读。
+#
+#   现在改成：预筛结果直接进送审提示词，给的是**可解读的证据**：
+#     · 命中偏移 + 命中字节 + 前后上下文  → AI 能判"这是真载荷还是源码里的字符串字面量"
+#     · 规则自己的 meta                   → AI 知道这条规则什么时候会错（作者写的误报史）
+#   不给分数、不给分档 —— 那是判断，留给 AI 做。
+YARA_DETAIL_MAX_RULES = 8          # 最多列几条规则
+YARA_DETAIL_MAX_PER_RULE = 5       # 每条规则最多列几个命中位置
+YARA_DETAIL_MAX_TOTAL = 20         # 全文最多列几个命中位置
+YARA_DETAIL_CONTEXT_BYTES = 60     # 每个命中位置前后各取多少字节上下文
+YARA_DETAIL_READ_LIMIT = 16 * 1024 * 1024  # 读文件取上下文的上限，超了不取上下文
+
+
+def yara_match_details(path: Path) -> list[dict[str, Any]]:
+    """取出 YARA 命中的证据：规则 meta + 每个命中标识符的偏移/字节/上下文。
+
+    返回一个列表，每条对应一条命中的规则：
+        {rule, severity, description, tuning, benign_expectation,
+         instances: [{identifier, offset, matched, context}],
+         instances_shown, instances_total, truncated}
+    截断**显式记账**（truncated / instances_total），不让"只列了 5 处"被读成"只有 5 处"。
+    """
+    rules = load_yara_rules()
+    if rules is None:
+        return []
+    try:
+        matches = rules.match(str(path))
+    except Exception:
+        return []
+
+    # 取上下文要读原文件；读不动就不给上下文，但偏移和命中字节照给
+    raw = b""
+    try:
+        if path.is_file() and path.stat().st_size <= YARA_DETAIL_READ_LIMIT:
+            raw = path.read_bytes()
+    except OSError:
+        raw = b""
+
+    def _context(offset: int, length: int) -> str:
+        if not raw:
+            return ""
+        lo = max(0, offset - YARA_DETAIL_CONTEXT_BYTES)
+        hi = min(len(raw), offset + length + YARA_DETAIL_CONTEXT_BYTES)
+        text = raw[lo:hi].decode("utf-8", errors="replace")
+        # 按字节切片会把多字节字符切一半，解出 U+FFFD。对提示词来说那是噪音，
+        # 直接去掉（宁可少一个字，也不要给 AI 一串看不懂的替换符）。
+        text = text.replace("\ufffd", "")
+        # 换行压成可见符号，免得提示词里出现真假难辨的空行
+        return text.replace("\r\n", "\n").replace("\n", "⏎")
+
+    out: list[dict[str, Any]] = []
+    total_shown = 0
+    for m in matches:
+        if len(out) >= YARA_DETAIL_MAX_RULES:
+            break
+        meta = dict(getattr(m, "meta", {}) or {})
+        instances: list[dict[str, Any]] = []
+        total_for_rule = 0
+        for sm in getattr(m, "strings", []) or []:
+            ident = getattr(sm, "identifier", "") or ""
+            for inst in getattr(sm, "instances", []) or []:
+                total_for_rule += 1
+                if len(instances) >= YARA_DETAIL_MAX_PER_RULE:
+                    continue
+                if total_shown >= YARA_DETAIL_MAX_TOTAL:
+                    continue
+                offset = int(getattr(inst, "offset", 0) or 0)
+                matched = getattr(inst, "matched_data", b"") or b""
+                instances.append(
+                    {
+                        "identifier": ident,
+                        "offset": offset,
+                        "matched": matched.decode("utf-8", errors="replace")[:120],
+                        "context": _context(offset, len(matched)),
+                    }
+                )
+                total_shown += 1
+        out.append(
+            {
+                "rule": getattr(m, "rule", ""),
+                "severity": meta.get("severity"),
+                "description": meta.get("description"),
+                "tuning": meta.get("tuning"),
+                "benign_expectation": meta.get("benign_expectation"),
+                "instances": instances,
+                "instances_shown": len(instances),
+                "instances_total": total_for_rule,
+                "truncated": total_for_rule > len(instances),
+            }
+        )
+    return out
+
+
+# 本环境**跑不了**的检测项：不是"没发现问题"，是"根本没跑"。
+# 这两件事必须分开告诉 AI —— 否则它会把"缺上下文"读成"没风险"
+# （对照 beenuar/AiSOC 的教训：Saying nothing here would let the model read
+#   absence of context as absence of risk）。
+def unavailable_detections() -> list[str]:
+    """返回本次环境不可用的检测项及原因（写进送审提示词）。"""
+    items: list[str] = []
+    if not _find_exe("clamscan", "clamdscan", env_var="CLAMAV_EXE"):
+        items.append("ClamAV —— 未安装（没有传统 AV 基线可对照）")
+    if not _find_exe("capa", env_var="CAPA_EXE"):
+        items.append("capa —— 未安装（拿不到能力识别与 ATT&CK 映射）")
+    if not _find_exe("floss", env_var="FLOSS_EXE"):
+        items.append("FLOSS —— 未安装（拿不到解混淆/解码字符串）")
+    if not os.getenv("VT_API_KEY", "").strip():
+        items.append("VirusTotal —— 未配置 API Key（拿不到外部多引擎票数）")
+    return items
 
 
 def find_script_patterns(text: str) -> list[str]:
@@ -825,122 +1011,32 @@ SIGNATURE_CACHE_MAX = int(os.getenv("AI_AV_SIGNATURE_CACHE_MAX", "4096"))
 SIGNATURE_TIMEOUT_SECONDS = float(os.getenv("AI_AV_SIGNATURE_TIMEOUT", "30"))
 TRUSTED_SIGNER_SUBSTR = os.getenv("AI_AV_TRUSTED_SIGNER_SUBSTR", "Microsoft")
 
-# ⚠️ 血泪教训（2026-09-19 实测）：从 WSL 调 Windows 的 Get-AuthenticodeSignature 验签，
-# 会让 **Windows Defender 实时防护**顺手打开每个文件 —— 目录里只要有真恶意样本，
-# Defender 就直接隔离/删除它们。那一晚它吃掉了 Dike 恶意集 19 个 + 定向集 2 个样本
-# （Defender 检测记录里的 Resources 全是 \\wsl.localhost\... 路径，时间与 AI 扫描一一对应）。
-# 所以默认对样本目录**禁用 Windows 侧访问**，只保留 Linux 侧能做的判断（内嵌签名目录）。
-# 想恢复验签只有两条路：① 先在 Defender 里排除该目录（需管理员），再把本变量置空；
-# ② 对纯良性语料，可安全地把本变量置空。
-NO_WIN_TOUCH_DIRS = [
-    Path(p).expanduser()
-    for p in os.getenv("AI_AV_NO_WIN_TOUCH_DIRS", "~/ai-av-bench").split(os.pathsep)
-    if p.strip()
-]
-
-SIGNATURE_NOTE = (
-    "无内嵌签名目录 ≠ 未签名：Windows 系统文件大量依赖目录签名（Catalog），"
-    "判断签名状态只能以 windows_verify 字段为准；本字段为 unknown 时不得断言文件『无数字签名』。"
-)
-
-
-def windows_touch_blocked(path: Path) -> Path | None:
-    """路径是否落在「禁止 Windows 侧访问」目录内（防止 Defender 实时防护隔离样本）。"""
-    try:
-        resolved = path.resolve()
-    except OSError:
-        resolved = path
-    for directory in NO_WIN_TOUCH_DIRS:
-        try:
-            resolved.relative_to(directory.resolve())
-            return directory
-        except (ValueError, OSError):
-            continue
-    return None
-
-
-def _embedded_signature(path: Path) -> bool | None:
-    """PE 内嵌签名目录是否存在（None = 不是 PE / 解析失败）。"""
-    try:
-        import pefile  # type: ignore
-    except ImportError:
-        return None
-    try:
-        pe = pefile.PE(str(path), fast_load=True)
-    except Exception:
-        return None
-    try:
-        directory = pe.OPTIONAL_HEADER.DATA_DIRECTORY[
-            pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_SECURITY"]
-        ]
-        return bool(getattr(directory, "VirtualAddress", 0) or 0)
-    except Exception:
-        return None
-    finally:
-        try:
-            pe.close()
-        except Exception:
-            pass
-
-
-def _windows_verify(path: Path) -> dict[str, Any]:
-    """调 Windows 的 Get-AuthenticodeSignature 验签（WSL 下经 powershell.exe）。"""
-    exe = shutil.which("powershell.exe") or shutil.which("powershell") or shutil.which("pwsh")
-    if not exe:
-        return {"available": False, "error": "未找到 PowerShell，无法做 Windows 级验签"}
-
-    win_path = str(path)
-    if os.name != "nt":
-        if not shutil.which("wslpath"):
-            return {"available": False, "error": "WSL 下缺少 wslpath，无法转换路径"}
-        try:
-            win_path = subprocess.check_output(["wslpath", "-w", str(path)], text=True).strip()
-        except Exception as exc:  # noqa: BLE001
-            return {"available": False, "error": f"wslpath 失败: {exc}"}
-
-    safe = win_path.replace("'", "''")
-    script = (
-        f"$s = Get-AuthenticodeSignature -LiteralPath '{safe}'; "
-        "if ($null -eq $s) { '{}' } else { "
-        "[pscustomobject]@{"
-        "Status = $s.Status.ToString(); "
-        "StatusMessage = $s.StatusMessage; "
-        "SignatureType = $s.SignatureType.ToString(); "
-        "Signer = $s.SignerCertificate.Subject"
-        "} | ConvertTo-Json -Compress }"
-    )
-    try:
-        proc = subprocess.run(
-            [exe, "-NoProfile", "-NonInteractive", "-Command", script],
-            capture_output=True,
-            timeout=SIGNATURE_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        return {"available": False, "error": f"验签超时（>{SIGNATURE_TIMEOUT_SECONDS}s）"}
-    except OSError as exc:
-        return {"available": False, "error": f"无法调用 PowerShell: {exc}"}
-
-    out = _decode_output(proc.stdout or b"").strip()
-    err = _decode_output(proc.stderr or b"")
-    start = out.find("{")
-    if start < 0:
-        return {"available": False, "error": f"验签无输出: {(err or out)[:200]}"}
-    try:
-        data = json.loads(out[start:])
-    except Exception as exc:  # noqa: BLE001
-        return {"available": False, "error": f"验签输出解析失败: {exc}: {out[:200]}"}
-    return {
-        "available": True,
-        "status": data.get("Status"),
-        "status_message": (data.get("StatusMessage") or "")[:300],
-        "signature_type": data.get("SignatureType"),
-        "signer": data.get("Signer"),
-        "raw_excerpt": out[start:start + 400],
-    }
-
+# ⚠️ 血泪教训（2026-09-19 + 2026-09-26 两次实测）：
+# 从 WSL 调 Windows 的 Get-AuthenticodeSignature 验签，会让 **Windows Defender
+# 实时防护**顺手打开每个文件 —— 目录里只要有真恶意样本，Defender 就直接隔离/删除。
+#   2026-09-19：吃掉 Dike 恶意集 19 个 + 定向集 2 个样本
+#   2026-09-26：吃掉验证集 21 个样本（时间戳与 AI 扫描窗口一一对应）
+# 当时的对策是 `AI_AV_NO_WIN_TOUCH_DIRS` 保护目录 —— 但那只是把问题挪走：
+# 保护目录内验签一律跳过（53 次调用 53 次 unknown），保护目录外照样丢样本。
+#
+# 2026-09-26 起**根治**：验签改走 `aiav.authenticode`（asn1crypto + cryptography），
+# 全程在本地完成，不再有任何跨到 Windows 的动作。于是
+# `NO_WIN_TOUCH_DIRS` / `windows_touch_blocked()` / `_embedded_signature()` /
+# `_windows_verify()` 全部删除 —— 没有 Windows 侧访问，就不需要保护目录。
 
 def signature_evidence(path: Path, use_cache: bool = True) -> dict[str, Any]:
-    """签名状态的确定性证据块：内嵌签名目录 + Windows 级验签 + 可信签发者判定。"""
+    """签名状态的确定性证据块 —— **纯 Python 验签，不碰 Windows**。
+
+    2026-09-26 换的实现。旧版调 `powershell.exe Get-AuthenticodeSignature`，是个死结：
+      · 路径在 `AI_AV_NO_WIN_TOUCH_DIRS` 内 → 跳过 → 53 次调用 53 次 unknown
+      · 路径在外 → 真的递给 Windows → **Defender 顺手隔离样本**（实测吃掉 21 个）
+      · Linux 机器 / 独立虚拟机里根本没有 powershell.exe → 直接不可用
+    现在改走 `aiav.authenticode`（asn1crypto + cryptography），四件事全在本地做完：
+    解析签名表、取签名者与证书链、重算 Authenticode 摘要比对、验签 + 链验证。
+
+    字段沿用旧名，`status` 仍取 `Valid` / `HashMismatch` / `NotTrusted` / `unknown`
+    —— `apply_claim_guard` 与 `find_claim_warnings` 都读它，别改名。
+    """
     try:
         st = path.stat()
         cache_key = f"{path}|{st.st_mtime_ns}|{st.st_size}"
@@ -950,61 +1046,70 @@ def signature_evidence(path: Path, use_cache: bool = True) -> dict[str, Any]:
     if use_cache and cache_key in SIGNATURE_CACHE:
         return SIGNATURE_CACHE[cache_key]
 
-    embedded = _embedded_signature(path)
-    blocked_dir = windows_touch_blocked(path)
-    if blocked_dir is not None:
-        verify: dict[str, Any] = {
-            "available": False,
-            "error": (
-                f"路径受 AI_AV_NO_WIN_TOUCH_DIRS 保护（{blocked_dir}）：按策略跳过 Windows 侧验签，"
-                "避免 Defender 实时防护在验签时隔离/删除样本"
-            ),
-        }
-    elif path.is_file():
-        verify = _windows_verify(path)
-    else:
-        verify = {"available": False, "error": "路径不是文件"}
+    from aiav import authenticode
 
-    status = (verify.get("status") or "").lower() if verify.get("available") else "unknown"
-    signer = verify.get("signer") or ""
-    trusted = bool(verify.get("available")) and status == "valid" and (
+    raw = authenticode.analyze(path)
+
+    # conclusion → status 映射。**"没有内嵌签名"不能映射成 not_signed**：
+    # Windows 系统文件大量用目录签名（Catalog），其签名在 CatRoot 里，Linux 侧拿不到，
+    # 所以只能落 unknown —— 这样 claim_guard 才会拦住"无签名"这类断言。
+    conclusion = raw.get("conclusion") or "unknown"
+    status = {
+        "valid_signed_embedded": "Valid",
+        "tampered": "HashMismatch",
+        "signature_invalid": "NotTrusted",
+    }.get(conclusion, "unknown")
+
+    signer = raw.get("signer") or ""
+    chain_ok = raw.get("chain_valid")
+    # trusted_signer 的语义与旧版一致：**签名有效 + 签发者名字匹配**。
+    # 不把 chain_valid 并进来 —— 微软的代码签名根不在 Linux CA 库里，
+    # 并进来会让所有微软签名文件在 Linux 上一律 trusted=False，白白丢掉信号。
+    # 链的可信度单独用 chain_valid 三态表达（True/False/None）。
+    trusted = bool(status == "Valid") and (
         TRUSTED_SIGNER_SUBSTR.lower() in signer.lower()
     )
 
-    if not verify.get("available"):
-        conclusion = "unknown"
-    elif status == "valid" and (verify.get("signature_type") or "").lower() == "catalog":
-        conclusion = "valid_signed_catalog"
-    elif status == "valid":
-        conclusion = "valid_signed_embedded"
-    elif status.startswith("notsigned") or status == "not_signed":
-        # PowerShell `Get-AuthenticodeSignature` 的 Status 有若干"确实没有签名"的取值
-        # （NotSigned / NotSignedUnknown → 小写后 notsigned / notsignedunknown），
-        # 这些才能落成 not_signed。
-        conclusion = "not_signed"
-    elif status in ("", "unknown", "unknownerror"):
-        # 验签没给出结论 ≠ 未签名：必须留成 unknown，让 claim_guard 拦住"无签名"这类断言。
-        # （旧实现写成 `("notsigned", "notsigned")` —— 重复字面量，unknown 掉进 else，
-        #  conclusion 变成 `verify_unknown` 这种既不是 not_signed 也不是 unknown 的第三态。）
-        conclusion = "unknown"
-    else:
-        conclusion = f"verify_{status or 'unknown'}"
-
     info: dict[str, Any] = {
-        "embedded_signature_directory": embedded,
-        "windows_verify": verify if verify.get("available") else {
-            "available": False, "error": verify.get("error"),
-        },
-        "status": verify.get("status") if verify.get("available") else "unknown",
-        "signature_type": verify.get("signature_type") if verify.get("available") else None,
+        # 兼容旧字段名：外部（报告/守卫/提示词）读的是这几个
+        "embedded_signature_directory": bool(raw.get("has_signature")),
+        "status": status,
+        "signature_type": "embedded" if raw.get("has_signature") else None,
         "signer": signer or None,
         "trusted_signer": trusted,
         "conclusion": conclusion,
-        "note": SIGNATURE_NOTE,
+        # 新增：纯 Python 验签的具体结果（AI 判断"签名可不可信"要看这些）
+        "signer_cn": raw.get("signer_cn") or _signer_cn(signer),
+        "chain": raw.get("chain") or [],
+        "digest_algorithm": raw.get("digest_algorithm"),
+        "digest_match": raw.get("digest_match"),
+        "signature_valid": raw.get("signature_valid"),
+        "chain_valid": chain_ok,
+        "timestamped": bool(raw.get("timestamped")),
+        "verify_method": "authenticode-python",
+        "note": raw.get("note") or SIGNATURE_NOTE,
     }
+    if raw.get("error"):
+        info["error"] = raw["error"]
     if use_cache:
         _signature_cache_put(cache_key, info)
     return info
+
+
+def _signer_cn(signer: str) -> str | None:
+    """从证书 DN 里抠出 CN（兜底路径；正常情况下 authenticode 已经给了 signer_cn）。
+
+    要同时认两种格式：RFC4514 的 `CN=xxx` 和 asn1crypto human_friendly 的
+    `Common Name: xxx` —— 只认前者会一直返回 None（踩过一次）。
+    """
+    for part in (signer or "").split(","):
+        part = part.strip()
+        low = part.lower()
+        if low.startswith("cn="):
+            return part[3:].strip() or None
+        if low.startswith("common name:"):
+            return part[len("common name:"):].strip() or None
+    return None
 
 
 def _signature_cache_put(key: str, info: dict[str, Any]) -> None:
@@ -1203,10 +1308,20 @@ def strings_ioc(ctx: RunContext[ScanDeps]) -> str:
 
 
 def signature_verify(ctx: RunContext[ScanDeps]) -> str:
-    """验证当前文件的数字签名（Windows 级，含目录签名）。
+    """验证当前 PE 文件的 Authenticode 数字签名（纯本地解析，不联网、不碰 Windows）。
 
-    返回内嵌签名目录是否存在、Windows 验签状态/类型/签发者、是否可信签发者。
-    结论只能以 windows_verify 为准：**无内嵌签名 ≠ 未签名**。
+    返回签名者、完整证书链、重算的 PE 摘要是否与签名时一致（判断有没有被改）、
+    签名本身是否验过、证书链是否可信。
+
+    **只对 PE（.exe / .dll / .sys / .pyd / .ocx / .cpl 等）有意义。**
+    脚本（.js/.vbs/.bat/.ps1）、文档（.doc*/.xls*/.pdf）、容器（.lnk/.rtf/.wsf）
+    没有 Authenticode 签名这个概念 —— 对这些文件调用它只会拿到「不是 PE 文件」，
+    纯属浪费一次往返。**判断"这个文件是谁签的"之前，先确认它是 PE。**
+    签名信息用来给 PE 平反（例如"Qt 官方签名的组件"），不能反过来当恶意证据。
+
+    **无内嵌签名 ≠ 未签名**：Windows 系统文件大量使用目录签名（Catalog），
+    其签名存放在 CatRoot 里，非 Windows 环境取不到 —— 这种情况返回 unknown，
+    不得据此断言文件「无数字签名」。
     """
     info = signature_evidence(ctx.deps.file_path)
     summary = json.dumps(info, ensure_ascii=False)
@@ -1578,23 +1693,64 @@ def shell_exec(ctx: RunContext[ScanDeps], command: str, timeout_seconds: int = 3
     return summary[:9000]
 
 
+# 暴露给 AI 的工具（2026-09-26 从 12 个收到 8 个）。
+#
+# 删掉 4 个，理由分两类：
+#
+# ① 信息已经在送审提示词里了 —— 再给工具就是让 AI 复述把它叫来的理由：
+#      yara_scan   YARA 命中（规则名 / severity / 偏移 / 命中字节 / 上下文 / 规则 meta）
+#                  现在由 yara_match_details() 直接写进提示词。
+#                  实测教训：旧版提示词里本来就有「YARA 命中」，AI 还是调了 8 次工具
+#                  （10 个文件里 8 个）—— 光把信息塞提示词不够，工具在它就会调。
+#      hash_lookup 本地哈希表只有 1 条（EICAR），而命中就在 scanner 短路层判掉了，
+#                  根本进不到 AI。所以 AI 调它**必然返回 false** —— 9 次调用 9 次 false，
+#                  是个逻辑死胡同。哈希是"身份"，不是"特征"，不该做成工具。
+#
+# ② 本环境跑不了，给了就是让它空转 —— 改为在提示词里标「未执行」：
+#      clamav_scan 未安装（被调 10 次，10 次全返回 "not installed"）
+#      vt_lookup   未配置 API Key（被调 2 次，全返回 "not set"）
+#      合起来 15 次空转 = 当时全部 AI 工具调用的 23%。
+#
+# 注意：**不能只是"不暴露"就完事**。藏掉工具会让 AI 以为"这项查过了、没问题"，
+# 而真相是"根本没跑"。所以提示词里必须显式写「以下检测未执行」（unavailable_detections()）。
+#
+# ── 2026-09-26 第二轮实测补的坑 ──
+# 上面这条只做了一半：`clamav_scan` / `vt_lookup` 从表里摘了，但 `capa_scan` / `floss_scan`
+# 留着没摘 —— 于是提示词写着「capa 未安装」，工具表里却摆着 `capa_scan`。
+# AI 的选择很合理：它不信提示词，直接调。63 个文件的验证跑里
+# capa_scan 被调 22 次、floss_scan 被调 23 次，**每一次都返回 "not installed"**。
+# 提示词和工具表打架时，AI 信工具表。
+#
+# 所以：**工具表必须按本机环境过滤**，由 `available_tools()` 生成，跟
+# `unavailable_detections()` 用同一套探测逻辑 —— 一边不提供工具，一边明说它没跑，两边一致。
 ALL_TOOLS = [
-    yara_scan,
     pe_analyze,
     signature_verify,
     pdf_analyze,
     script_analyze,
     office_macro_analyze,
     strings_ioc,
-    hash_lookup,
-    vt_lookup,
-    clamav_scan,
     capa_scan,
     floss_scan,
 ]
 
-# 默认不把 shell 放进全量扫描，防止 Agent 在难样本上反复调命令烧 token。
-# 需要深度分析时显式设置 AI_AV_ENABLE_SHELL=1。
-if os.getenv("AI_AV_ENABLE_SHELL") == "1":
-    ALL_TOOLS.insert(0, shell_exec)
+
+def available_tools() -> list:
+    """按本机环境过滤后的工具表 —— 交给 Agent 的就是这一份。
+
+    跑不了的工具不暴露（否则 AI 会调它，拿回一句"没装"，白烧一次往返）。
+    配套要求：这些工具对应的检测项必须出现在 `unavailable_detections()` 里，
+    让 AI 知道"这个维度没查"，而不是"查了没问题"。
+    """
+    tools = [pe_analyze, signature_verify, pdf_analyze, script_analyze,
+             office_macro_analyze, strings_ioc]
+    if _find_exe("capa", env_var="CAPA_EXE"):
+        tools.append(capa_scan)
+    if _find_exe("floss", env_var="FLOSS_EXE"):
+        tools.append(floss_scan)
+    # 默认不把 shell 放进全量扫描，防止 Agent 在难样本上反复调命令烧 token。
+    # 需要深度分析时显式设置 AI_AV_ENABLE_SHELL=1。
+    if os.getenv("AI_AV_ENABLE_SHELL") == "1":
+        tools.insert(0, shell_exec)
+    return tools
 

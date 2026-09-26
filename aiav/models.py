@@ -90,3 +90,7 @@ class ScanDeps:
     sha256: str
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     shell_history: list[str] = field(default_factory=list)
+    # 送审提示词里给出的 YARA 命中详情（偏移 / 命中字节 / 上下文 / 规则 meta）。
+    # 用途：证据溯源时把"AI 引用送审事实"和"AI 凭空推断"区分开 ——
+    # 送审事实是文件里的真实字节，引用它算有依据；两者都对不上的才算无依据。
+    yara_details: list[dict[str, Any]] = field(default_factory=list)

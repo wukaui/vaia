@@ -38,9 +38,23 @@ from aiav.tools import (
     pe_packing_signals,
     run_yara,
     signature_evidence,
+    unavailable_detections,
 )
 
 EICAR = rb"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
+# EICAR 判定只认"文件本身就是测试标记"。真正的 EICAR 文件 68 字节；
+# 放宽到 256 是给带换行/尾注的变体留余量，同时把"源码里定义了这个常量"的文件排除掉。
+# 设成 0 可以退回旧的子串匹配行为（不推荐，见 quick_prefilter 里的说明）。
+EICAR_MAX_BYTES = 256
+
+
+def _file_size(path: Path) -> int:
+    """取文件大小；取不到返回 0（宁可不判 EICAR，也不要因为 stat 失败而漏判）。"""
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
 
 # 预筛分数阈值：达到它就该交人工/AI 复核。单独抽成常量是因为"读不了"这条路径
 # 必须能**明确**顶到阈值上（见 quick_prefilter 的 read_error 分支），
@@ -170,7 +184,20 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
         score = max(score, SUSPICIOUS_SCORE_THRESHOLD)
         reasons.append(f"读取失败（无法排除，按需人工复核）: {read_error[:160]}")
 
-    eicar = EICAR in head
+    # EICAR：判"文件**就是** EICAR 测试文件"，不是"文件**含有** EICAR 字符串"。
+    #
+    # ⚠️ 2026-09-26 实测教训：旧实现是 `eicar = EICAR in head`（前 4KB 子串匹配），
+    # 于是**定义了这个常量的源码文件自己中招** —— `aiav/scanner.py` 第 44 行写着
+    # `EICAR = rb"X5O!P%..."`，落在前 4KB 内，被判 malicious(0.99)。
+    # 而且 EICAR 在短路集合里，AI **根本没机会看它**（对照 `demo.yar` 那次：
+    # 同样是自指命中，但走的是特征路径，被 AI 正确平反成 clean）。
+    #
+    # 这违反本项目自己定的短路原则（见下方 `evidence.eicar or known_bad_hash` 处的注释）：
+    #   · SHA256 精确匹配 = 这个文件**就是**那个恶意样本 → 身份，可以短路
+    #   · 字符串/规则命中  = 这个文件**含有**某种特征   → 特征，必须交给 AI 看语境
+    # EICAR 的子串匹配属于后者。真正的 EICAR 文件只有 68 字节、内容就是这个字符串本身，
+    # 所以用"体积 + 内容"把它和"含这个字符串的大文件"分开。
+    eicar = EICAR_MAX_BYTES > 0 and _file_size(path) <= EICAR_MAX_BYTES and EICAR in head
     known_bad_hash = sha256.lower() in load_known_bad_hashes()
 
     if eicar:
@@ -397,6 +424,10 @@ def heuristic_verdict(evidence: PreliminaryEvidence) -> Verdict:
 # =========================
 # 证据溯源 / 断言校验（确定性，不花 token）
 # =========================
+# 证据溯源用的工具名表。
+# 注意：`yara_scan` / `hash_lookup` / `vt_lookup` / `clamav_scan` 已于 2026-09-26
+# 从 `tools.ALL_TOOLS` 摘除（前两个信息已进送审提示词，后两个本环境跑不了），
+# 名字保留在这里只为能正确解析**历史报告**的 tool_calls，新扫描不会出现。
 TOOL_NAMES_FOR_ATTRIBUTION = (
     "prefilter", "yara_scan", "pe_analyze", "signature_verify", "script_analyze",
     "office_macro_analyze", "strings_ioc", "hash_lookup", "vt_lookup", "clamav_scan",
@@ -422,10 +453,54 @@ UNATTRIBUTED_LABEL_AI = "无工具输出支撑（模型推断）"
 UNATTRIBUTED_LABEL_DETERMINISTIC = "确定性判定（规则档，未调用模型）"
 
 
+# 送审提示词里给出的事实，作为证据溯源的一个**合法来源**。
+# 理由：提示词里的 YARA 命中偏移/字节/上下文就是文件里的真实内容，
+# AI 引用它是有依据的；把它和"凭空推断"混为一谈会让检查误报。
+PROMPT_FACT_SOURCE = "送审事实"
+
+
+def prompt_fact_texts(
+    yara_details: Sequence[dict] | None,
+    unavailable: Sequence[str] | None = None,
+) -> list[str]:
+    """把送审提示词里给出的事实拍平成可匹配的文本，供证据溯源使用。
+
+    包含两部分，因为它们都是**提示词里明确写了的**：
+      · YARA 命中位置与规则作者声明
+      · 本次**未执行**的检测项 —— AI 说"ClamAV 没跑，所以这个维度没查"是有依据的，
+        不该被标成"凭空推断"（对照 beenuar/AiSOC：缺上下文必须显式说明，
+        说明它也是提示词给的）。
+    """
+    facts: list[str] = []
+    for d in yara_details or []:
+        rule = str(d.get("rule") or "")
+        if rule:
+            facts.append(rule)
+        for key in ("description", "benign_expectation", "tuning"):
+            val = d.get(key)
+            if val:
+                facts.append(f"{rule} {val}")
+        for inst in d.get("instances") or []:
+            facts.append(
+                f"{rule} {inst.get('identifier', '')} {inst.get('matched', '')} "
+                f"偏移 {inst.get('offset', '')} {inst.get('context', '')}"
+            )
+    for item in unavailable or []:
+        facts.append(f"未执行的检测 {item}")
+    if unavailable:
+        # 中文分词是按"连续汉字段"切的（见 _TOKEN_RE），所以「本环境未安装 ClamAV」
+        # 和「未安装」对不上。这里把检测项名字单独聚成一条，让"我提到了 ClamAV/capa/
+        # FLOSS/VT 但没跑"这类声明能对上 —— 名字是 ASCII 标识符，token 匹配稳定。
+        names = [str(x).split("——")[0].strip() for x in unavailable]
+        facts.append("未执行的检测 " + " ".join(n for n in names if n))
+    return [f for f in facts if f.strip()]
+
+
 def attribute_evidence(
     claims: Sequence[str],
     tool_calls: Sequence[dict] | None,
     agent_used: bool | None = None,
+    prompt_facts: Sequence[str] | None = None,
 ) -> list[dict]:
     """把每条结论对到工具输出上，标注来源与原始输出片段。
 
@@ -433,6 +508,7 @@ def attribute_evidence(
       explicit          结论里写明了工具名，且该工具这次真的被调用过
       explicit_name_only 写了工具名，但该工具这次没被调用（可疑）
       overlap           没写工具名，但与某次工具输出有 ≥2 个 token 重合
+      prompt_fact       没对到工具，但对到了**送审提示词里给出的事实**（如 YARA 命中位置）
       unattributed      找不到任何工具支撑 —— 谁说的按 `agent_used` 分开标：
                         走过 AI 的算模型推断；没走 AI 的算确定性判定（规则档）。
 
@@ -442,6 +518,7 @@ def attribute_evidence(
     ai_ran = bool(tool_calls) if agent_used is None else bool(agent_used)
     fallback_label = UNATTRIBUTED_LABEL_AI if ai_ran else UNATTRIBUTED_LABEL_DETERMINISTIC
     calls = [(str(c.get("tool") or ""), str(c.get("summary") or "")) for c in (tool_calls or [])]
+    facts = [str(f) for f in (prompt_facts or [])]
     out: list[dict] = []
     for claim in claims or []:
         text = str(claim)
@@ -466,6 +543,16 @@ def attribute_evidence(
                     best = (inter, summary, tool)
             if best[0] >= 2:
                 source, excerpt, support = best[2], best[1], "overlap"
+        if source is None and facts:
+            # 没对到工具，但可能对到了送审事实（YARA 命中位置/规则声明）
+            claim_tokens = _claim_tokens(text)
+            best_fact = (0, "")
+            for fact in facts:
+                inter = len(claim_tokens & _claim_tokens(fact))
+                if inter > best_fact[0]:
+                    best_fact = (inter, fact)
+            if best_fact[0] >= 2:
+                source, excerpt, support = PROMPT_FACT_SOURCE, best_fact[1], "prompt_fact"
         out.append({
             "claim": text,
             "source": source or fallback_label,
@@ -505,6 +592,51 @@ def find_claim_warnings(claims: Sequence[str], evidence: PreliminaryEvidence) ->
 
 
 SIGNATURE_REWORD_SUFFIX = "（签名状态未知：本次未完成 Windows 验签，不能据此断言『无签名』）"
+
+
+def find_autonomy_warnings(sources: Sequence[dict]) -> list[str]:
+    """AI 档硬约束：结论必须至少有一条有依据 —— 工具输出或送审事实。
+
+    判定权交给 AI 的前提是它没在空转。如果全部结论都 `unattributed`，说明它既没取证、
+    也没引用送审提示词里给出的事实，只可能是凭空推断，必须标出来。
+
+    `prompt_fact` 算合格来源：送审提示词里的 YARA 命中偏移/字节/上下文就是文件里的真实
+    内容，引用它是有依据的（对照 beenuar/AiSOC 的做法：平台预取上下文，agent 消费它，
+    而不是自己去发发现类调用）。但**光复述送审理由不算干活** —— 那种情况会被
+    `find_repetition_warnings` 单独标出来。
+    """
+    if not sources:
+        return []
+    if any(str(s.get("support")) in ("explicit", "overlap", "prompt_fact") for s in sources):
+        return []
+    return [f"未自主取证：{len(sources)} 条结论没有一条能对到 AI 自己调用的工具输出或送审事实"]
+
+
+def find_repetition_warnings(
+    sources: Sequence[dict],
+    tool_calls: Sequence[dict] | None,
+) -> list[str]:
+    """AI 只复述送审理由、没做自己的取证时标出来。
+
+    送审理由（YARA 命中位置、脚本特征）是"为什么叫你"，把它换个说法写进 evidence
+    不算完成了分析。这正是旧的「复读机」问题 —— 实测：提示词里本来就有 YARA 命中，
+    AI 还是调了 8 次 `yara_scan` 把同一批命中复述一遍。
+
+    与 `find_autonomy_warnings` 的分工：那个管"完全没依据"，这个管"有依据但依据全是
+    送审理由、自己一次都没取证"。
+    """
+    if not sources:
+        return []
+    own = [s for s in sources if str(s.get("support")) in ("explicit", "overlap")]
+    if own:
+        return []
+    if not any(str(s.get("support")) == "prompt_fact" for s in sources):
+        return []          # 全无依据的情况由 find_autonomy_warnings 负责，不重复报
+    ai_calls = [c for c in (tool_calls or []) if str(c.get("tool")) != "prefilter"]
+    return [
+        f"只复述送审理由：{len(sources)} 条结论全部来自提示词给定的事实，"
+        f"没有一条对到自己取证的工具输出（本次 AI 实际调用工具 {len(ai_calls)} 次）"
+    ]
 
 
 def apply_claim_guard(
@@ -1026,8 +1158,16 @@ def scan_file(
         path, sha256, with_signature=_signature_check_enabled(agent is not None)
     )
 
-    # EICAR / 已知恶意哈希直接判定，不消耗 API（这条本地强信号短路在消融三档里都一样，
-    # 实验会单独统计有多少文件走了短路，避免把它算成某一层的贡献）
+    # 确定层直接结案，不消耗 API（消融三档里都一样，实验单独统计短路文件数）。
+    #
+    # ⚠️ 2026-09-24 实测教训：**短路集合只允许放"身份"信号，不允许放"特征"信号。**
+    # 本轮曾把 `HIGH_CONFIDENCE_YARA_RULES` 也加进短路，结果 `data/rules/demo.yar`
+    # （我们自己的规则文件，因为定义了 EICAR 规则而含有 EICAR 模式串）被自己的规则命中，
+    # 短路后判 suspicious —— 而送 AI 时它会被正确平反成 clean。
+    # 结论：SHA256 精确匹配 = 这个文件**就是**那个恶意样本，语境无法改变它；
+    # 而字符串/规则命中 = 这个文件**含有**某种特征，规则文件、安全工具源码、测试样本
+    # 都会命中，只有语境能定性 —— 那正是"第二意见"要干的活，不能短路掉。
+    # （EICAR 保留短路：完整测试标记是标准测试产物，不属于"特征命中"这一类。）
     if evidence.eicar or evidence.known_bad_hash:
         audit: list[dict] = []
         verdict = heuristic_verdict(evidence)
@@ -1178,9 +1318,15 @@ def scan_file(
                 })
             agent_used = True
             guarded, _changed = apply_claim_guard(verdict, evidence, audit)
-            claim_warnings = find_claim_warnings(verdict.evidence, evidence) + guarded
+            evidence_sources = attribute_evidence(
+                verdict.evidence,
+                agent_trace,
+                prompt_facts=prompt_fact_texts(deps.yara_details, unavailable_detections()),
+            )
+            claim_warnings = (find_claim_warnings(verdict.evidence, evidence) + guarded
+                              + find_autonomy_warnings(evidence_sources)
+                              + find_repetition_warnings(evidence_sources, agent_trace))
             claim_warnings = list(dict.fromkeys(claim_warnings))
-            evidence_sources = attribute_evidence(verdict.evidence, agent_trace)
         except Exception as exc:
             error = f"Agent 调用失败，已降级到规则判断: {exc}"
             verdict = heuristic_verdict(evidence)
