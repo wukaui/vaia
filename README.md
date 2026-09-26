@@ -8,24 +8,27 @@
 
 ```bash
 python3 -m venv .venv
-.venv/bin/python -m pip install -e ".[dev]"        # CLI + 测试
-.venv/bin/python -m pip install -e ".[web]"        # 需要本地 Web UI 时再加
+.venv/bin/python -m pip install -e ".[dev]"     # CLI（含 capa / floss）
+.venv/bin/python -m pip install -e ".[web]"     # 需要本地 Web UI 时再加
 
-cp .env.example .env                               # 填 AGENT_API_KEY 后 AI 档才可用
-.venv/bin/aiav scan <文件或目录> --no-ai            # 零 token 先跑通（只用规则与确定性证据）
-.venv/bin/aiav scan <文件或目录>                    # 带 AI 判决（花 token，受 --token-budget 硬闸约束）
+.venv/bin/aiav capa-setup                       # 必做：拉 capa 规则集 + 签名集（约 20MB）
+.venv/bin/aiav tools                            # 核对：8 个工具是否都到位
+
+cp .env.example .env                            # 填 AGENT_API_KEY 后 AI 档才可用
+.venv/bin/aiav scan <文件或目录> --no-ai         # 零 token 先跑通（只用规则与确定性证据）
+.venv/bin/aiav scan <文件或目录>                 # 带 AI 判决（花 token，受 --token-budget 硬闸约束）
 ```
 
 报告落在 `-o` 指定的目录（默认 `./reports/`），同时产出 JSON 与 HTML。
 
 ```bash
 .venv/bin/aiav --help
-.venv/bin/aiav quarantine list                     # 隔离区（默认 dry-run，还原时校验 sha256）
+.venv/bin/aiav quarantine list                  # 隔离区（默认 dry-run，还原时校验 sha256）
 .venv/bin/aiav whitelist add <sha256>
 .venv/bin/aiav history
 ```
 
-Web UI（可选依赖）：
+Web UI：
 
 ```bash
 .venv/bin/python -m uvicorn aiav.web.app:app --host 127.0.0.1 --port 8080
@@ -42,6 +45,17 @@ Web UI（可选依赖）：
 
 **红线**：样本全程只读、不执行；不自动删除；隔离默认 dry-run；页面与报告不出现密钥。
 
+## capa 语料
+
+`flare-capa` 是核心依赖，但 **pip 包不自带规则和签名**，所以 `capa-setup` 是必做的一步。
+
+- 落点：源码运行 = `<仓库>/third_party/`；pip 装的包 = 用户数据目录
+  （Linux `~/.local/share/aiav/`，Windows `%LOCALAPPDATA%\aiav\`）
+- 二进制 + 规则集 + 签名集**三样齐了** `capa_scan` 才出现在工具表里；缺任何一样都不暴露给 AI，
+  而是由送审提示词的「本次未执行的检测」段声明原因 —— AI 知道「这个维度没查」，而不是「查了没问题」
+- 大文件上 capa 会超时（实测 13.5MB 静态链接的 `cpack.exe` 跑 6 分钟未完、内存 2.8GB），
+  超时会被如实写进结论；要放宽设 `CAPA_TIMEOUT`
+
 ## 包内布局
 
 | 路径 | 职责 |
@@ -49,8 +63,9 @@ Web UI（可选依赖）：
 | `aiav/cli.py` | CLI 入口（`aiav` 命令） |
 | `aiav/scanner.py` | 扫描编排：预筛 → 证据 → AI 判决 → 策略 → 处置 |
 | `aiav/tools.py` | AI 可调用的工具集 + YARA / 哈希等确定性证据 |
-| `aiav/capa_data.py` | capa 规则集/签名集的获取与状态（`aiav capa-setup` / `aiav tools`） |
+| `aiav/capa_data.py` | capa 语料获取与状态（`aiav capa-setup` / `aiav tools`） |
 | `aiav/agent.py` | LLM Agent 装配（判决者） |
+| `aiav/authenticode.py` | 纯 Python PE Authenticode 验签（不依赖 Windows） |
 | `aiav/models.py` | 数据模型（`FileReport` / `Verdict` / `RiskLevel` …） |
 | `aiav/report.py` | JSON + HTML 报告渲染 |
 | `aiav/cache.py` | 扫描缓存（按规则指纹失效） |
@@ -64,30 +79,11 @@ Web UI（可选依赖）：
 | 变量 | 用途 |
 |---|---|
 | `AGENT_API_KEY` / `AGENT_BASE_URL` / `AGENT_MODEL` | LLM 接入（不配则只能 `--no-ai`） |
-| `AGENT_MAX_TOKENS` | **必须 ≥ 16000**。推理模型的思考 token 也算在里面，默认 3000 会被挤爆 → 模型零输出 → 静默降级到规则判定（实测 4/63 个文件失败，其中 2 个降级成 clean） |
-| `AI_AV_STATE_DIR` | 隔离区/白名单/历史/上传目录，默认 `~/ai-av-bench/ai-av-state` |
+| `AGENT_MAX_TOKENS` | **必须 ≥ 16000**。推理模型的思考 token 也算在里面，默认 3000 会被挤爆 → 模型零输出 → 静默降级到规则判定 |
+| `AI_AV_STATE_DIR` | 隔离区 / 白名单 / 历史 / Web 上传目录 |
 | `VT_API_KEY` | VirusTotal 按 hash 查询（可选，不上传样本） |
-| `CAPA_DATA` / `CAPA_RULES` / `CAPA_SIGS` / `CAPA_EXE` | 覆盖 capa 语料目录与可执行文件位置（一般不用设，见下） |
-
-## capa 语料（规则 + 签名）
-
-`flare-capa` 是核心依赖，但 **pip 包不自带规则和签名**，装完补一条命令：
-
-```bash
-aiav capa-setup     # 按本机 capa 版本号拉规则集 + 签名集，约 20MB
-aiav tools          # 核对：capa ✓  规则 1057 条✓  签名 3/3 个✓
-```
-
-落点：源码运行 = `<仓库>/third_party/`；pip 装的包 = 用户数据目录
-（Linux `~/.local/share/aiav/`，Windows `%LOCALAPPDATA%\aiav\`）。
-三样（二进制 + 规则集 + 签名集）齐了 `capa_scan` 才会出现在工具表里；缺任何一样都不会
-暴露给 AI，而是由送审提示词的「本次未执行的检测」段声明原因 ——
-这样 AI 知道「这个维度没查」，而不是「查了没问题」。
-
-
-## 测试
-
-```bash
-.venv/bin/python -m pytest              # 默认跳过 integration（需要真实 API Key）
-.venv/bin/python -m pytest -m integration
-```
+| `CAPA_TIMEOUT` | capa 单文件超时秒数，默认 180 |
+| `CAPA_DATA` / `CAPA_RULES` / `CAPA_SIGS` / `CAPA_EXE` | 覆盖 capa 语料与可执行文件位置 |
+| `AI_AV_ENABLE_SHELL` | 设为 `1` 才把 shell 放进工具表（默认关，防 Agent 反复调命令烧 token） |
+| `AI_AV_TOKEN_BUDGET` | token 预算硬闸，超出后自动降级为规则判定 |
+| `AI_AV_AGENT_SAMPLES` | AI 多次采样取多数票，默认 1 |
