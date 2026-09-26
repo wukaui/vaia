@@ -86,9 +86,7 @@ def scan(
         except Exception as exc:
             console.print(f"[yellow]AI Agent 未启用，降级为规则扫描：{exc}[/yellow]")
 
-    # capa 是必装工具：缺了它，能力识别与 ATT&CK 映射整块消失，AI 只能写"capa 不可用"。
-    # 实测代价：63 文件基准跑完，capa_scan 一次都没被调用过（环境里根本没装）。
-    # 所以缺失要在扫描**开始**就吼一声，而不是安静地少一个工具。
+    # capa 缺失要在扫描开始就吼，别安静地少一个工具
     if agent is not None:
         capa_note = capa_ready_or_note()
         if capa_note:

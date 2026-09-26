@@ -1,13 +1,6 @@
-"""capa 外部语料的获取：规则集 + 签名集。
+"""capa 外部语料的获取：规则集 + 签名集（pip 包不自带）。
 
-为什么要有这个模块：capa 是**必装工具**（能力识别 + ATT&CK 映射），但 pip 包
-不自带规则和签名 —— `flare-capa` 9.4.0 的 `capa/rules/` 是空目录、`capa/sigs/`
-压根不存在。把"自己想办法弄到语料"写进 README 当手工步骤，实测后果就是：
-63 文件基准跑完，`capa_scan` 一次都没被调用过，AI 只能在结论里写"capa 不可用"。
-必装的工具，获取就必须是一条命令。
-
-版本对齐：规则集和签名集都从 `mandiant/capa*` 的**同一个 tag** 拉，
-tag 取自本机 capa 二进制的版本号。版本错配时 capa 会报规则不兼容。
+规则集和签名集都从 `mandiant/capa*` 的同一个 tag 拉，tag 取本机 capa 版本号。
 """
 
 from __future__ import annotations
@@ -42,11 +35,7 @@ _SIG_FALLBACK = [
 
 
 def capa_version() -> str | None:
-    """本机 capa 的版本号（`9.4.0`），取不到返回 None。
-
-    先问二进制（`capa --version` → `capa 9.4.0`），再退回包元数据。
-    必须以二进制为准：`CAPA_EXE` 可以指向一个和 pip 包版本不同的独立可执行文件。
-    """
+    """本机 capa 版本号，取不到返回 None。以二进制为准（CAPA_EXE 可能指向别的版本）。"""
     exe = _find_exe("capa", env_var="CAPA_EXE")
     if exe:
         try:
@@ -76,13 +65,7 @@ def _expected_sig_count(sigs: Path) -> int:
 
 
 def _get(url: str, dest: Path | None = None, attempts: int = 5) -> bytes:
-    """下载 url。给了 dest 就**流式写盘 + 断点续传 + 重试**。
-
-    为什么这么啰嗦：raw.githubusercontent.com 从国内拉 7.5MB 的 .sig 实测 ~20KB/s，
-    120 秒读超时会在下到一半时炸掉。一次性 `resp.read()` 的写法下不了这两个文件
-    —— 实测 3 个签名只拿到 1 个，而且是**成功退出**（静默少一批编译器签名，
-    正是"必装工具静默降级"的老毛病）。所以：超时了带着 Range 头从断点接着下，最多 5 轮。
-    """
+    """下载 url。给了 dest 就流式写盘 + 断点续传 + 重试（GitHub 在国内会中途断流）。"""
     last_exc: Exception | None = None
     for _ in range(attempts):
         done = dest.stat().st_size if (dest and dest.is_file()) else 0
@@ -122,11 +105,7 @@ def _get(url: str, dest: Path | None = None, attempts: int = 5) -> bytes:
 
 
 def _extract_rules(blob: bytes, dest: Path) -> int:
-    """把 capa-rules 的 tar.gz 解出 `*.yml` 到 dest，返回写入的文件数。
-
-    自己遍历成员而不是 `extractall`：tarball 里顶层是 `capa-rules-<ver>/`，
-    直接解会多套一层；顺带挡掉 `..` 之类的路径穿越。
-    """
+    """把 capa-rules 的 tar.gz 解出 `*.yml` 到 dest，返回文件数。自己遍历成员：顶层多套一层目录，顺带挡路径穿越。"""
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True, exist_ok=True)
@@ -203,13 +182,12 @@ def fetch(version: str | None = None, quiet: bool = False, force: bool = False) 
     names = _sig_names(version)
     sigs = root / "capa-sigs"
     sigs.mkdir(parents=True, exist_ok=True)
-    # 记下"本该有几个"，让 `aiav tools` 能离线看出签名集是否残缺 ——
-    # 少一个 .sig 不会报错，只会静默少认一批编译器签名，这种降级必须可见。
+    # 记下"本该有几个"，让 `aiav tools` 能离线看出签名集残缺
     (sigs / _MANIFEST).write_text(
         json.dumps({"version": version, "sigs": names}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    say(f"  拉签名集 {len(names)} 个文件 …（共约 15MB，raw.githubusercontent 慢，耐心等）")
+    say(f"  拉签名集 {len(names)} 个文件 …（共约 15MB）")
     got = 0
     missing: list[str] = []
     for name in names:
@@ -222,17 +200,16 @@ def fetch(version: str | None = None, quiet: bool = False, force: bool = False) 
         try:
             _get(url, dest=target)
             got += 1
-        except Exception as exc:  # noqa: BLE001 - 单个签名失败不该让整步失败
+        except Exception as exc:  # noqa: BLE001
             missing.append(name)
             say(f"  ! {name} 失败: {exc}")
     if got == 0:
         return False, f"签名集一个都没拉到（{len(names)} 个候选全失败）"
     if missing:
-        # 部分成功也要说清楚缺了什么，别报一句"成功"了事
         return True, (
             f"规则 {count} 条 / 签名 {got}/{len(names)} 个 —— "
-            f"缺 {', '.join(missing)}，capa 能跑但会少认一批编译器签名；"
-            f"重跑 `aiav capa-setup` 会断点续传 → {root}"
+            f"缺 {', '.join(missing)}（capa 能跑，但少认一批编译器签名）；"
+            f"重跑 `aiav capa-setup` 续传 → {root}"
         )
     return True, f"规则 {count} 条 / 签名 {got} 个 → {root}"
 

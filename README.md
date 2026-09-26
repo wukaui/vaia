@@ -69,29 +69,16 @@ Web UI（可选依赖）：
 | `VT_API_KEY` | VirusTotal 按 hash 查询（可选，不上传样本） |
 | `CAPA_DATA` / `CAPA_RULES` / `CAPA_SIGS` / `CAPA_EXE` | 覆盖 capa 语料目录与可执行文件位置（一般不用设，见下） |
 
-## capa 语料（规则 + 签名）—— **必装，不是可选项**
+## capa 语料（规则 + 签名）
 
-`flare-capa` 是核心依赖，`pip install aiav` 就会装上。但 **pip 包不自带规则和签名**，
-直接跑会报错退出：
-
-```
-ERROR capa: default embedded rules not found! (maybe you installed capa as a library?)
-ERROR capa: Using default signature path, but it doesn't exist. Please install the signatures first
-```
-
-所以装完必须补一条命令：
+`flare-capa` 是核心依赖，但 **pip 包不自带规则和签名**，装完补一条命令：
 
 ```bash
-aiav capa-setup     # 按本机 capa 版本号拉取规则集 + 签名集，约 20MB
-aiav tools          # 核对状态：capa ✓  规则 1057 条✓  签名 3 个✓
+aiav capa-setup     # 按本机 capa 版本号拉规则集 + 签名集，约 20MB
+aiav tools          # 核对：capa ✓  规则 1057 条✓  签名 3/3 个✓
 ```
 
-**为什么这是必装而不是可选**：capa 是 PE 能力识别与 ATT&CK 映射的唯一来源。
-把它当可选 extra 的实测代价 —— 63 文件基准跑完，`capa_scan` 一次都没被调用过
-（环境里根本没装），AI 只能在结论里反复写「capa/FLOSS 均不可用，能力识别维度未查」。
-工具是可选的，AI 的研判就不可能是完整的。
-
-语料落点：源码运行 = `<仓库>/third_party/`；`pip` 装的包 = 用户数据目录
+落点：源码运行 = `<仓库>/third_party/`；pip 装的包 = 用户数据目录
 （Linux `~/.local/share/aiav/`，Windows `%LOCALAPPDATA%\aiav\`）。
 三样（二进制 + 规则集 + 签名集）齐了 `capa_scan` 才会出现在工具表里；缺任何一样都不会
 暴露给 AI，而是由送审提示词的「本次未执行的检测」段声明原因 ——

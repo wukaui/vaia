@@ -425,10 +425,6 @@ def yara_match_details(path: Path) -> list[dict[str, Any]]:
     return out
 
 
-# 本环境**跑不了**的检测项：不是"没发现问题"，是"根本没跑"。
-# 这两件事必须分开告诉 AI —— 否则它会把"缺上下文"读成"没风险"
-# （对照 beenuar/AiSOC 的教训：Saying nothing here would let the model read
-#   absence of context as absence of risk）。
 def _user_data_root() -> Path:
     """跨平台用户数据目录 —— pip 装出来的包找不到项目根时的落点。"""
     if sys.platform == "win32":
@@ -442,13 +438,8 @@ def _user_data_root() -> Path:
 
 
 def capa_data_root() -> Path:
-    """capa 外部语料（规则集 + 签名集）的根目录。`CAPA_DATA` 可覆盖。
-
-    ⚠️ 不能只认 `<项目根>/third_party`：pip 装出来的包里
-    `Path(__file__).parent.parent` 是 **site-packages**，那里永远不会有 third_party/ ——
-    实测干净 venv 里 `pip install aiav` 之后，即使把规则集放在手边，
-    `capa_ready()` 也一律返回 False，capa 就这么"可选"地消失了。
-    所以源码运行用仓库，装出来的包用用户数据目录。
+    """capa 语料根目录，`CAPA_DATA` 可覆盖。源码运行用仓库 third_party/；
+    装出来的包 PROJECT_ROOT 是 site-packages，改用用户数据目录。
     """
     override = os.getenv("CAPA_DATA", "").strip()
     if override:
@@ -471,25 +462,12 @@ def _pick_capa_dir(env_var: str, name: str) -> Path:
 
 
 def capa_rules_dir() -> Path:
-    """capa 规则集目录。`CAPA_RULES` 可覆盖，默认 `<capa_data_root()>/capa-rules`。
-
-    ⚠️ **pip 装的 capa 不自带规则**（实测 `flare-capa` 9.4.0：包内 `capa/rules/`
-    是空目录、`capa/sigs/` 根本不存在，直接跑会报
-    "default embedded rules not found! (maybe you installed capa as a library?)" 并退出码 10）。
-    规则由 `aiav capa-setup` 拉取（见 README）。找不到规则时**不该把 capa_scan 暴露给 AI** ——
-    否则每次调用都必然拿回一句 error，白烧一次往返（实测第一轮就是这样：63 个文件
-    里 capa_scan 被调 22 次，全是 "not installed"）。
-    """
+    """capa 规则集目录，`CAPA_RULES` 可覆盖。pip 包不自带，由 `aiav capa-setup` 拉取。"""
     return _pick_capa_dir("CAPA_RULES", "capa-rules")
 
 
 def capa_sigs_dir() -> Path:
-    """capa 签名集目录（`CAPA_SIGS` 可覆盖）。同样是 pip 包不自带的外部语料。
-
-    v9.4.0 有 3 个 `.sig`（共约 15MB）。**少一个不会报错，但会静默少认一批编译器签名** ——
-    实测 `~/ai-av-cli/third_party/capa-sigs` 只拉了 1 个（4.6MB），
-    另两个（atlmfc / common_libs）从来没到位过。
-    """
+    """capa 签名集目录，`CAPA_SIGS` 可覆盖。v9.4.0 有 3 个 `.sig`；少一个不报错，只是少认一批编译器签名。"""
     return _pick_capa_dir("CAPA_SIGS", "capa-sigs")
 
 
@@ -502,15 +480,8 @@ def _capa_timeout() -> int:
 
 
 def capa_ready() -> tuple[bool, str]:
-    """capa 能不能**真的跑起来**。返回 (可用, 不可用原因)。
-
-    三样都要：**二进制 + 规则集 + 签名集**。
-
-    ⚠️ 实测（2026-09-26，capa 9.4.0）：
-      · pip 装的 capa 不自带规则 → 报 "default embedded rules not found!"，退出码 10
-      · **没有签名集直接报错退出** → "Using default signature path, but it doesn't
-        exist. Please install the signatures first"，退出码 1、零输出
-    所以只看"二进制在不在"不够 —— 会把必然报错的工具暴露给 AI，每次调用白烧一次往返。
+    """capa 能不能真的跑起来，返回 (可用, 原因)。二进制 + 规则集 + 签名集三样都要：
+    缺规则报 "embedded rules not found" 退出码 10，缺签名直接退出码 1 零输出。
     """
     if not _find_exe("capa", env_var="CAPA_EXE"):
         return False, "未安装（拿不到能力识别与 ATT&CK 映射）"
@@ -529,6 +500,8 @@ def capa_ready() -> tuple[bool, str]:
     return True, ""
 
 
+# 跑不了的检测项：不是"没发现问题"，是"根本没跑"。这两件事必须分开告诉 AI，
+# 否则它会把"缺上下文"读成"没风险"（对照 beenuar/AiSOC 的教训）。
 def unavailable_detections() -> list[str]:
     """返回本次环境不可用的检测项及原因（写进送审提示词）。"""
     items: list[str] = []
@@ -1565,9 +1538,7 @@ def capa_scan(ctx: RunContext[ScanDeps]) -> str:
     cmd.append(str(ctx.deps.file_path))
 
     try:
-        # 180s 是实测出来的预算：cpack.exe（13.5MB 静态链接）跑 1057 条规则 6 分钟还没完，
-        # 内存吃到 2.8GB。大文件上 capa 必然超时，AI 会如实写"capa 超时未出结果"——
-        # 这是"未查"，不是"没问题"。要放宽就设 CAPA_TIMEOUT。
+        # 大文件上 capa 会超时（cpack.exe 13.5MB 跑 6 分钟未完、内存 2.8GB），要放宽设 CAPA_TIMEOUT
         proc = subprocess.run(cmd, capture_output=True, timeout=_capa_timeout())
         capa_stdout = _decode_output(proc.stdout or b"")
         capa_stderr = _decode_output(proc.stderr or b"")
@@ -1659,11 +1630,8 @@ def floss_scan(ctx: RunContext[ScanDeps]) -> str:
                 "stack_count": len(stack),
                 "tight_count": len(tight),
                 "interesting_strings": interesting[:80],
-                # ⚠️ 必须 `_decode_output`：`proc.stderr` 是 **bytes**，直接塞进 result 会让
-                # 下面那句 `json.dumps` 抛 TypeError("Object of type bytes is not JSON
-                # serializable")，异常从工具里冒出去 → 整轮 Agent 调用失败 →
-                # scanner 静默降级到规则判定 → 7 个恶意 PE 被判 clean。
-                # 只在 floss 往 stderr 写了警告时触发（空 stderr 因为 `b"" or ""` 是 str，看不出来）。
+                # 必须 decode：proc.stderr 是 bytes，直接 json.dumps 会抛 TypeError，
+                # 异常冒出工具 → 整轮 Agent 失败 → 静默降级判 clean（实测 7 个恶意 PE 中招）
                 "stderr": _decode_output(proc.stderr or b"")[:500],
             }
     except subprocess.TimeoutExpired:
