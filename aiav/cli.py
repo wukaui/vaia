@@ -31,7 +31,11 @@ def _configure_console_encoding() -> None:
 
 
 _configure_console_encoding()
+# `load_dotenv()` 从**调用它的文件**往上找 .env：源码运行 = 仓库根 ✅，
+# pip 装的包 = site-packages/aiav/ 往上走到 / 都没有，工作目录的 .env 永远看不到 ❌。
 load_dotenv()
+load_dotenv(Path.cwd() / ".env")
+load_dotenv(Path.home() / ".config" / "aiav" / ".env")
 
 app = typer.Typer(help="轻量级 AI 恶意文件扫描 Agent", no_args_is_help=True)
 quarantine_app = typer.Typer(help="隔离区：查看 / 还原被隔离的文件", no_args_is_help=True)
