@@ -21,6 +21,7 @@ dependencies = [
     "pefile>=2024.8.26",
     "yara-python>=4.5",
     "oletools>=0.60",
+    "olefile>=0.47",
     "pypdf>=4.0",
     # PE Authenticode 验签（aiav/authenticode.py）。纯 Python，不依赖 Windows ——
     # 旧实现走 powershell.exe 验签会把样本递给 Defender，实测被吃掉 21 个。
