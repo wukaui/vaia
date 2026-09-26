@@ -34,7 +34,9 @@
 """
 from __future__ import annotations
 
+import functools
 import hashlib
+import ssl
 import struct
 from pathlib import Path
 from typing import Any
@@ -368,6 +370,34 @@ def _is_trusted_root(root: Any) -> bool:
         return False
 
 
+def _complete_chain(ordered: list[Any]) -> list[Any]:
+    """用系统信任库把链补到根 —— **PKCS#7 里通常不带根证书**。
+
+    实测：doclient.dll 的 PKCS#7 只有 [Microsoft Windows, Microsoft Windows
+    Production PCA 2011] 两张，根（Microsoft Root Certificate Authority 2010）
+    不在里面。不补链的话 `ordered[-1]` 是中间 CA，`_is_trusted_root` 自然判它不是根，
+    于是所有微软签名文件都落成 chain=None（在 Windows 上也是）。
+    """
+    try:
+        by_subject = {c.subject.rfc4514_string(): c for c in _system_roots()}
+        seen = {c.subject.rfc4514_string() for c in ordered}
+        while True:
+            last = ordered[-1]
+            if last.subject.rfc4514_string() == last.issuer.rfc4514_string():
+                break  # 自签根，到头了
+            parent = by_subject.get(last.issuer.rfc4514_string())
+            if parent is None:
+                break  # 本机没有它的签发者，链就到这里
+            key = parent.subject.rfc4514_string()
+            if key in seen:
+                break  # 防环
+            ordered.append(parent)
+            seen.add(key)
+    except Exception:  # noqa: BLE001 - 补链失败就用原链，不影响其它判断
+        pass
+    return ordered
+
+
 def _verify_chain(chain: list[Any]) -> tuple[bool | None, str]:
     """验证证书链：逐环验签 + 有效期 + 根是否受信。
 
@@ -385,7 +415,7 @@ def _verify_chain(chain: list[Any]) -> tuple[bool | None, str]:
         return None, "没有证书"
     try:
         certs = [_to_crypto_cert(c) for c in chain]
-        ordered = _order_chain(certs)
+        ordered = _complete_chain(_order_chain(certs))
 
         for child, parent in zip(ordered, ordered[1:]):
             try:
@@ -421,21 +451,52 @@ def _now():
     return datetime.now(timezone.utc)
 
 
-def _system_roots() -> list[Any]:
-    """读系统根证书（/etc/ssl/certs 之类）。读不到就返回空表，链验降级为 unknown。"""
-    import ssl
+@functools.lru_cache(maxsize=1)
+def _system_roots() -> tuple[Any, ...]:
+    """读系统根证书。**Linux 和 Windows 两条路**，因为两边的存法根本不同。
 
-    paths = ssl.get_default_verify_paths()
-    pem = paths.cafile
-    if not pem or not Path(pem).is_file():
-        return []
-    try:
-        from cryptography import x509 as cx
+      · Linux/macOS：CA bundle 文件（`/etc/ssl/certs/ca-certificates.crt` 之类）
+      · Windows：**没有 CA bundle 文件** —— `ssl.get_default_verify_paths().cafile`
+        在 Windows 上通常是 None，根证书在系统证书 store 里。走 `ssl.enum_certificates("ROOT")`。
 
-        blob = Path(pem).read_bytes()
-        return list(cx.load_pem_x509_certificates(blob))
-    except Exception:  # noqa: BLE001
-        return []
+    读不到就返回空表 —— 链验会降级成 `chain_valid=None`（unknown），
+    而不是误报 False。这个区分很重要：**"离线查不到根"不等于"证书不可信"**。
+
+    结果用 lru_cache 缓存：枚举系统 store 有几百毫秒开销，每个文件都做一遍不值得。
+    """
+    from cryptography import x509 as cx
+
+    certs: list[Any] = []
+
+    # Windows：系统证书 store（该 API 只在 Windows 上存在）
+    #
+    # **ROOT 和 CA 两个 store 都要枚举**：微软的代码签名根
+    # （Microsoft Root Certificate Authority 2010）不在 ROOT 里而在 CA 里 ——
+    # 只读 ROOT 会让所有微软签名的文件链验落到 unknown（实测 doclient.dll）。
+    enum_certs = getattr(ssl, "enum_certificates", None)
+    if enum_certs is not None:
+        for store in ("ROOT", "CA"):
+            try:
+                for der, encoding, _trust in enum_certs(store):
+                    if encoding != "x509_asn":
+                        continue
+                    try:
+                        certs.append(cx.load_der_x509_certificate(der))
+                    except Exception:  # noqa: BLE001 - 个别证书解析失败不影响其余
+                        continue
+            except Exception:  # noqa: BLE001
+                continue
+
+    # Linux/macOS：CA bundle 文件
+    if not certs:
+        try:
+            pem = ssl.get_default_verify_paths().cafile
+            if pem and Path(pem).is_file():
+                certs = list(cx.load_pem_x509_certificates(Path(pem).read_bytes()))
+        except Exception:  # noqa: BLE001
+            certs = []
+
+    return tuple(certs)
 
 
 def analyze(path: Path) -> dict[str, Any]:
