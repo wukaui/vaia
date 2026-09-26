@@ -85,6 +85,15 @@ class FileReport(BaseModel):
     # 看不出"重试过没有"、也看不出"这条结论其实不是 AI 下的"。
     # 结构：{attempts, max_attempts, retried, retry_count, outcome, failures[], final_error, policy}
     agent_retry: dict[str, Any] = Field(default_factory=dict)
+    # 确定性证据前置（2026-09-27）：这次送审前**本地预采集**了哪些工具输出、多大、多久。
+    # 结构：{kind, tools[], skipped[], chars, elapsed_ms, truncated, budget_note, policy}
+    # 用途：回答"这次判定到底是不是靠 AI 一轮轮调工具调出来的"。
+    evidence_preload: dict[str, Any] = Field(default_factory=dict)
+    # 工具调用 / token 留痕（2026-09-27）：这次判定**用了几次工具调用**、**有没有走深挖路径**、
+    # 花了多少 token。口径：`tool_calls` 只数 AI 自己发起的（预采集是本地 0 token 的活，
+    # 单独记在 evidence_preload 里），`deep_dive` = 有没有走过工具调用这条路。
+    # 结构：{tool_calls, deep_dive, tokens, by_tool{}, preloaded_tools[]}
+    agent_usage: dict[str, Any] = Field(default_factory=dict)
 
 
 @dataclass

@@ -38,9 +38,10 @@ Web UI：
 
 ```text
 目录遍历 → 白名单/缓存 → 预筛（YARA / 容器 / 宏 / LNK / RTF / 壳 / 压缩包 / PDF / 签名证据）
-        → 脱壳与解包后的二次判定 → AI 多步工具调用（判决者）
+        → 确定性证据前置（本地按类型采齐 PE / 字符串 / 签名 / capa / floss / 脚本 / 宏 / PDF，0 token）
+        → 脱壳与解包后的二次判定 → AI 判决（证据已给全，默认不必再调工具，按需深挖）
         → 策略层：记录分歧与提示（不改判）→ 处置（隔离 / 白名单 / 历史，默认 dry-run）
-        → JSON + HTML 报告（每条结论挂证据来源）
+        → JSON + HTML 报告（每条结论挂证据来源 + 这次用了几次工具调用）
 ```
 
 **红线**：样本全程只读、不执行；不自动删除；隔离默认 dry-run；页面与报告不出现密钥。
@@ -52,6 +53,7 @@ Web UI：
 | `aiav/cli.py` | CLI 入口（`aiav` 命令） |
 | `aiav/scanner.py` | 扫描编排：预筛 → 证据 → AI 判决 → 策略 → 处置 |
 | `aiav/tools.py` | AI 可调用的工具集 + YARA / 哈希等确定性证据 |
+| `aiav/preload.py` | 确定性证据前置：送审前本地按文件类型采齐工具输出（0 token），渲染进送审上下文 |
 | `aiav/capa_data.py` | capa 语料获取与状态（`aiav capa-setup` / `aiav tools`） |
 | `aiav/agent.py` | LLM Agent 装配（判决者） |
 | `aiav/authenticode.py` | 纯 Python PE Authenticode 验签（不依赖 Windows） |
@@ -76,6 +78,9 @@ Web UI：
 | `AI_AV_ENABLE_SHELL` | 设为 `1` 才把 shell 放进工具表（默认关，防 Agent 反复调命令烧 token） |
 | `AI_AV_TOKEN_BUDGET` | token 预算硬闸，超出后自动降级为规则判定 |
 | `AI_AV_AGENT_SAMPLES` | AI 多次采样取多数票，默认 1 |
+| `AI_AV_PRELOAD` | 确定性证据前置开关，默认 `1`（开）。设 `0` 退回旧行为：证据全靠 AI 自己一轮轮调工具（实测 8.0 次调用 / 2.3 万 token 每文件）。开着时按文件类型挑工具、每个文件只采一次，采集 0 token；报告留痕 `evidence_preload` + `agent_usage`（用了几次工具调用 / 有没有走深挖） |
+| `AI_AV_PRELOAD_MAX_CHARS` | 证据块整体字符预算，默认 14000。超出按优先级降级（结构化裁剪 → 整条不纳入），并显式标注 |
+| `AI_AV_PRELOAD_PER_TOOL_CHARS` | 覆盖单个工具的载荷字符上限（默认按工具给 3000~6000） |
 | `AGENT_RETRIES` | 模型调用重试次数，默认 `2`（指数退避 1s/2s + ±30% 抖动）。只重试**可重试类**错误：provider 上游 400 / 5xx / 429 / 网络抖动 / 空响应 / 输出截断；401/403/404 与非上游 400 这类确定性错误一次就放弃。每次判定在报告里留痕（`agent_retry`：用过重试还是最终降级到规则） |
 | `AGENT_RETRY_BASE_DELAY` / `AGENT_RETRY_MAX_DELAY` / `AGENT_RETRY_JITTER` | 退避基数（默认 1s）/ 单次等待上限（默认 20s）/ 抖动比例（默认 0.3） |
 | `CAPA_DETAIL_RULES` / `CAPA_DESC_CHARS` / `CAPA_OUTPUT_CHARS` | capa 送审注解预算：最多列几条详情（默认 40）/ 每条 description 截断长度（默认 200）/ 整段上限字符（默认 12000）。超出时按「砍 description → 砍条数」降级，并显式标注省略 |

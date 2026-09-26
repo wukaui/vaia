@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import os
 import re
 import threading
@@ -16,6 +15,13 @@ from aiav.budget import TokenBudget
 from aiav.cache import ScanCache, cache_enabled, report_from_cache
 from aiav.disposition import StateStore, default_store
 from aiav.models import FileReport, PreliminaryEvidence, RiskLevel, ScanDeps, Verdict
+from aiav.preload import (
+    ai_tool_calls,
+    collect as collect_preload,
+    detect_kind,
+    preload_enabled,
+    preload_tool_calls,
+)
 from aiav.tools import (
     CONTAINER_EXTENSIONS,
     HIGH_CONFIDENCE_YARA_RULES,
@@ -462,14 +468,21 @@ PROMPT_FACT_SOURCE = "送审事实"
 def prompt_fact_texts(
     yara_details: Sequence[dict] | None,
     unavailable: Sequence[str] | None = None,
+    extra_facts: Sequence[str] | None = None,
 ) -> list[str]:
     """把送审提示词里给出的事实拍平成可匹配的文本，供证据溯源使用。
 
-    包含两部分，因为它们都是**提示词里明确写了的**：
+    包含三部分，因为它们都是**提示词里明确写了的**：
       · YARA 命中位置与规则作者声明
       · 本次**未执行**的检测项 —— AI 说"ClamAV 没跑，所以这个维度没查"是有依据的，
         不该被标成"凭空推断"（对照 beenuar/AiSOC：缺上下文必须显式说明，
         说明它也是提示词给的）。
+      · `extra_facts`：其它**写进了提示词**的事实（2026-09-27 起主要是预筛信号 ——
+        它以前是伪装成一次 `prefilter` 工具调用进调用链的，现在直接进提示词事实表）。
+
+    注意：**预采集的确定性工具输出不在这里** —— 它们以 `source=preload` 的条目进
+    `deps.tool_calls`，走 `explicit` / `overlap` 两条常规溯源路径，
+    和 AI 自己调用的工具输出享受同等待遇（这正是"证据前置"要的效果）。
     """
     facts: list[str] = []
     for d in yara_details or []:
@@ -493,6 +506,10 @@ def prompt_fact_texts(
         # FLOSS/VT 但没跑"这类声明能对上 —— 名字是 ASCII 标识符，token 匹配稳定。
         names = [str(x).split("——")[0].strip() for x in unavailable]
         facts.append("未执行的检测 " + " ".join(n for n in names if n))
+    for item in extra_facts or []:
+        text = str(item)
+        if text.strip():
+            facts.append(text)
     return [f for f in facts if f.strip()]
 
 
@@ -624,6 +641,11 @@ def find_repetition_warnings(
 
     与 `find_autonomy_warnings` 的分工：那个管"完全没依据"，这个管"有依据但依据全是
     送审理由、自己一次都没取证"。
+
+    2026-09-27 口径调整（证据前置）：预采集的确定性工具输出以 `source=preload` 进
+    `deps.tool_calls`，溯源结果同样是 `explicit` / `overlap` —— 也就是**引用预采集证据
+    算"有依据"**，不再逼 AI 去把工具重跑一遍。这个警告因此只在"结论全部落在预筛理由
+    （YARA 命中这类"为什么叫你"）上"时才响，与设计意图一致。
     """
     if not sources:
         return []
@@ -632,7 +654,7 @@ def find_repetition_warnings(
         return []
     if not any(str(s.get("support")) == "prompt_fact" for s in sources):
         return []          # 全无依据的情况由 find_autonomy_warnings 负责，不重复报
-    ai_calls = [c for c in (tool_calls or []) if str(c.get("tool")) != "prefilter"]
+    ai_calls = ai_tool_calls(tool_calls)
     return [
         f"只复述送审理由：{len(sources)} 条结论全部来自提示词给定的事实，"
         f"没有一条对到自己取证的工具输出（本次 AI 实际调用工具 {len(ai_calls)} 次）"
@@ -962,6 +984,22 @@ def _risk_rank(risk: RiskLevel) -> int:
     return {RiskLevel.clean: 0, RiskLevel.suspicious: 1, RiskLevel.malicious: 2}[risk]
 
 
+def _collect_preload(path: Path, sha256: str, evidence: PreliminaryEvidence) -> dict:
+    """确定性证据前置的入口（可关：`AI_AV_PRELOAD=0` 退回"全靠 AI 自己调"）。
+
+    关掉时也返回一份**结构完整**的结果 —— 报告里的 `evidence_preload` 不能因为
+    "没采集"就变成空对象，那样读报告的人分不清"关掉了"和"采了但没东西"。
+    """
+    if not preload_enabled():
+        return {
+            "kind": detect_kind(path), "tools": [], "entries": [], "calls": [],
+            "skipped": ["全部工具（预采集已关闭：AI_AV_PRELOAD=0，证据由 AI 自己按需调用）"],
+            "chars": 0, "elapsed_ms": 0.0, "truncated": False, "budget_note": "",
+            "policy": "disabled",
+        }
+    return collect_preload(path, sha256, evidence.signature)
+
+
 def merge_retry_infos(infos: list[dict]) -> dict:
     """把多次采样各自的模型调用留痕合并成一条报告字段。
 
@@ -1245,6 +1283,9 @@ def scan_file(
     agent_trace: list[dict] = []
     # 模型调用重试留痕（2026-09-26 修①）：默认空 = 这条路压根没走 AI（规则档/缓存/低分放行）
     agent_retry: dict = {}
+    # 确定性证据前置 / 工具调用与 token 留痕（2026-09-27）：同样默认空 = 没走 AI
+    evidence_preload: dict = {}
+    agent_usage: dict = {}
     error: str | None = None
     audit = []
     evidence_sources: list[dict] = []
@@ -1331,32 +1372,54 @@ def scan_file(
     elif agent is not None and evidence.prefilter_score >= ai_threshold:
         retry_infos: list[dict] = []
         try:
+            # ---- 确定性证据前置（2026-09-27）：本地一次采齐，0 token ----
+            # 采集本身是本地跑工具（capa / floss / 字符串 / 验签…），**不是**让 AI 调用：
+            # 输出直接渲染进送审提示词，并原样进调用链（source=preload）供证据溯源。
+            # 实测动机：旧口径平均 8.0 次工具调用/文件、2.3 万 token/文件，
+            # 各工具调用率精确接近 1.00/文件 = 把工具清单从头到尾刷了一遍。
+            preload_result = _collect_preload(path, sha256, evidence)
+            preload_calls = preload_tool_calls(preload_result)
+            evidence_preload = {k: v for k, v in preload_result.items()
+                                if k not in ("entries", "calls")}
+            # 预筛信号以前伪装成一次 `prefilter` 工具调用进调用链 —— 那既不是 AI 调的，
+            # 也不该算进"用了几次工具调用"。现在它只作为**提示词事实**参与证据溯源。
+            prefilter_facts = [f"预筛信号 {r}" for r in (evidence.reasons or [])]
+
             verdicts: list[Verdict] = []
-            agent_trace = []
+            agent_trace = [dict(c) for c in preload_calls]
+            ai_calls_total = 0
+            by_tool: dict[str, int] = {}
             for i in range(samples):
                 deps = ScanDeps(file_path=path, sha256=sha256)
-                deps.tool_calls.append(
-                    {
-                        "tool": "prefilter",
-                        "summary": f"score={evidence.prefilter_score}; reasons={evidence.reasons}; yara={evidence.yara_hits}",
-                    }
-                )
-                if evidence.signature:
-                    # 确定性签名证据块也进调用链，结论要引用签名状态时就有据可查
-                    deps.tool_calls.append(
-                        {
-                            "tool": "signature_verify",
-                            "summary": json.dumps(evidence.signature, ensure_ascii=False)[:2000],
-                            "source": "prefilter",
-                        }
-                    )
-                verdicts.append(analyze_file_with_agent(agent, deps, evidence, budget=budget))
+                deps.tool_calls.extend(dict(c) for c in preload_calls)
+                verdicts.append(analyze_file_with_agent(agent, deps, evidence,
+                                                        budget=budget,
+                                                        preload=preload_result))
                 # 重试留痕：成功也要记（"这次是重试第 2 次才拿到的结论"本身就是信息）
                 retry_infos.append(dict(getattr(deps, "agent_retry", None) or {}))
+                own = ai_tool_calls(deps.tool_calls)
+                ai_calls_total += len(own)
+                for call in own:
+                    name = str(call.get("tool"))
+                    by_tool[name] = by_tool.get(name, 0) + 1
                 if samples > 1:
-                    agent_trace.extend({**c, "sample": i + 1} for c in deps.tool_calls)
+                    # 预采集条目是共享的，不按采样重复记；只按采样记 AI 自己的调用
+                    agent_trace.extend({**c, "sample": i + 1} for c in own)
                 else:
-                    agent_trace = deps.tool_calls
+                    agent_trace = list(deps.tool_calls)
+            agent_usage = {
+                # 口径：只数 AI 自己发起的调用（预采集/预筛注入的条目不算轮数）
+                "tool_calls": ai_calls_total,
+                # 有没有走"按需深挖"这条路：0 次 = 纯读预采集证据就下结论
+                "deep_dive": ai_calls_total > 0,
+                "by_tool": dict(sorted(by_tool.items(), key=lambda kv: -kv[1])),
+                "tokens": sum(int(i.get("tokens") or 0) for i in retry_infos),
+                "samples": samples,
+                "preloaded_tools": list(preload_result.get("tools") or []),
+                "preloaded_chars": int(preload_result.get("chars") or 0),
+                "preload_ms": preload_result.get("elapsed_ms"),
+                "preload_kind": preload_result.get("kind"),
+            }
             agent_retry = merge_retry_infos(retry_infos)
             verdict, sampling = merge_sampled_verdicts(verdicts)
             audit = []
@@ -1377,7 +1440,8 @@ def scan_file(
             evidence_sources = attribute_evidence(
                 verdict.evidence,
                 agent_trace,
-                prompt_facts=prompt_fact_texts(deps.yara_details, unavailable_detections()),
+                prompt_facts=prompt_fact_texts(deps.yara_details, unavailable_detections(),
+                                               extra_facts=prefilter_facts),
             )
             claim_warnings = (find_claim_warnings(verdict.evidence, evidence) + guarded
                               + find_autonomy_warnings(evidence_sources)
@@ -1390,6 +1454,15 @@ def scan_file(
                            or (retry_infos[-1] if retry_infos else {}))
             error = _degrade_note(exc, agent_retry)
             verdict = heuristic_verdict(evidence)
+            agent_usage = {
+                "tool_calls": ai_calls_total,
+                "deep_dive": ai_calls_total > 0,
+                "by_tool": by_tool,
+                "tokens": sum(int(i.get("tokens") or 0) for i in retry_infos),
+                "samples": samples,
+                "degraded": True,
+                "preloaded_tools": list(evidence_preload.get("tools") or []),
+            }
     else:
         verdict = heuristic_verdict(evidence)
         evidence_sources = attribute_evidence(verdict.evidence, agent_trace, agent_used=False)
@@ -1518,6 +1591,8 @@ def scan_file(
         sampling=sampling,
         archive=archive_info,
         agent_retry=agent_retry,
+        evidence_preload=evidence_preload,
+        agent_usage=agent_usage,
         disposition=({"status": "previously_quarantined", "id": prev.get("id")}
                      if prev and prev.get("status") == "quarantined" else {}),
     )

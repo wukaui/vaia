@@ -175,6 +175,31 @@ def build_summary(reports: list[FileReport]) -> dict[str, Any]:
                 f.get("kind", "?") for r in reports
                 for f in ((r.agent_retry or {}).get("failures") or []))),
         },
+        # 确定性证据前置 + 工具调用/token 留痕（2026-09-27）：回答两个问题 ——
+        # "这次判定用了几次工具调用"、"有没有走按需深挖这条路"。
+        # 口径：`tool_calls` 只数 AI 自己发起的（预采集是本地 0 token 的活，单独计）。
+        "usage": {
+            "tool_calls": sum(int((r.agent_usage or {}).get("tool_calls") or 0)
+                              for r in reports),
+            "files_deep_dive": sum(1 for r in reports if (r.agent_usage or {}).get("deep_dive")),
+            "files_no_tool_call": sum(1 for r in reports if (r.agent_usage or {}).get("tool_calls") == 0
+                                      and r.agent_used),
+            "tokens": sum(int((r.agent_usage or {}).get("tokens") or 0) for r in reports),
+            "by_tool": dict(Counter(
+                name for r in reports
+                for name, count in ((r.agent_usage or {}).get("by_tool") or {}).items()
+                for _ in range(int(count)))),
+        },
+        "preload": {
+            "files_preloaded": sum(1 for r in reports if (r.evidence_preload or {}).get("tools")),
+            "tools": dict(Counter(
+                name for r in reports
+                for name in ((r.evidence_preload or {}).get("tools") or []))),
+            "chars": sum(int((r.evidence_preload or {}).get("chars") or 0) for r in reports),
+            "ms": round(sum(float((r.evidence_preload or {}).get("elapsed_ms") or 0)
+                            for r in reports), 1),
+            "truncated": sum(1 for r in reports if (r.evidence_preload or {}).get("truncated")),
+        },
         "top_warnings": warnings[:5],
     }
 
@@ -222,6 +247,11 @@ def write_reports(reports: list[FileReport], output_dir: Path,
             # 模型调用重试（2026-09-26 修①）：让脚本能直接读"重试了几个文件、降级了几个"
             "files_with_retry": summary["retry"]["files_with_retry"],
             "files_degraded": summary["retry"]["files_degraded"],
+            # 确定性证据前置 + 工具调用/token（2026-09-27）：脚本直接读"平均几次调用/多少 token"
+            "tool_calls": summary["usage"]["tool_calls"],
+            "files_deep_dive": summary["usage"]["files_deep_dive"],
+            "tokens": summary["usage"]["tokens"],
+            "preloaded_files": summary["preload"]["files_preloaded"],
         },
         "aggregate": summary,
         # 逐文件溯源统计：报告正文里每条结论能不能对回工具输出，这里给出可核对的计数
@@ -448,6 +478,33 @@ def _file_row(r: FileReport, index: int) -> str:
             bits.append(f"错误: {_esc(kinds)}")
         cls = "disp" if outcome != "degraded_to_rules" else "disp warn"
         retry_html = f"<div class='{cls}'>{' · '.join(bits)}</div>"
+
+    # 工具调用 / 深挖留痕（2026-09-27）：一眼看出这次判定是"纯读预采集证据就下结论"
+    # 还是"自己又调了 N 次工具去深挖"。口径与 summary.usage.tool_calls 一致：
+    # 只数 AI 自己发起的调用（预采集是本地 0 token 的活，单独列在 evidence_preload 里）。
+    usage_html = ""
+    au = r.agent_usage or {}
+    if au:
+        calls = int(au.get("tool_calls") or 0)
+        bits = [f"工具调用 <b>{calls}</b> 次",
+                "走了深挖路径" if calls else "纯读预采集证据"]
+        if au.get("tokens"):
+            bits.append(f"{int(au['tokens']):,} token")
+        if au.get("by_tool"):
+            bits.append("、".join(f"{_esc(k)}×{v}" for k, v in list(au["by_tool"].items())[:6]))
+        if au.get("degraded"):
+            bits.append("<b class='error'>调用失败已降级</b>")
+        usage_html = f"<div class='disp'>{' · '.join(bits)}</div>"
+    pl = r.evidence_preload or {}
+    if pl.get("tools"):
+        pl_bits = [f"预采集 {len(pl['tools'])} 项: " + "、".join(_esc(t) for t in pl["tools"]),
+                   f"{int(pl.get('chars') or 0):,} 字符",
+                   f"{float(pl.get('elapsed_ms') or 0) / 1000:.1f}s（本地，0 token）"]
+        if pl.get("truncated"):
+            pl_bits.append("<b class='warn'>证据块超预算已降级</b>")
+        if pl.get("skipped"):
+            pl_bits.append("按类型未跑: " + "、".join(_esc(s) for s in pl["skipped"][:6]))
+        usage_html += f"<div class='disp'>{' · '.join(pl_bits)}</div>"
     search_text = " ".join([r.path, r.verdict.category or "", r.verdict.summary or "",
                             " ".join(r.yara_hits or [])])
     return f"""
@@ -455,6 +512,8 @@ def _file_row(r: FileReport, index: int) -> str:
                 data-cat="{_esc(r.verdict.category or 'unknown')}" data-error="{1 if r.error else 0}"
                 data-retried="{1 if rt.get('retried') else 0}"
                 data-degraded="{1 if rt.get('outcome') == 'degraded_to_rules' else 0}"
+                data-deepdive="{1 if au.get('deep_dive') else 0}"
+                data-preloaded="{1 if pl.get('tools') else 0}"
                 data-text="{_esc(search_text.lower())}" data-idx="{index}">
               <td><code>{_esc(r.path)}</code>{error}</td>
               <td><span class="badge" style="background:{color}">{_esc(r.verdict.risk.value)}</span>
@@ -462,7 +521,7 @@ def _file_row(r: FileReport, index: int) -> str:
               <td>{r.verdict.confidence:.2f}</td>
               <td>{_esc(r.verdict.category)}</td>
               <td>{_esc(r.verdict.summary)}</td>
-              <td>{'是' if r.agent_used else '否'}{retry_html}</td>
+              <td>{'是' if r.agent_used else '否'}{retry_html}{usage_html}</td>
               <td>{trace_cell}</td>
               <td>{disp_html or '-'}{pack_html}{sample_html}</td>
               <td>{evidence_html}{warnings_html}{sources_html}{policy_html}{proposals_html}{trace_html}</td>
@@ -531,8 +590,37 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
             f"{retry['files_degraded']} 个文件最终降级到规则判定</b>"
             f"（降级文件的 risk 不是 AI 结论，见明细行）。失败类型：{_esc(kinds)}</div>")
 
-    trace_table = {"结论条数（AI 档）": ev["ai_claims"],
-                   "有工具出处": ev["attributed"],
+    # 证据前置 / 工具调用说明（2026-09-27）：让读报告的人一眼看出"这次判定用了几次工具调用、
+    # 有没有走深挖路径"。平均调用次数是这套设计最核心的一个数，不能只藏在逐文件明细里。
+    usage_note = ""
+    usage = summary["usage"]
+    preload = summary["preload"]
+    if summary["agent_used"]:
+        avg_calls = usage["tool_calls"] / max(1, summary["agent_used"])
+        bits = [f"工具调用 {usage['tool_calls']} 次（平均 <b>{avg_calls:.1f}</b> 次/文件）",
+                f"走深挖路径 {usage['files_deep_dive']} 个文件",
+                f"纯读预采集证据 {usage['files_no_tool_call']} 个文件"]
+        if usage["tokens"]:
+            bits.append(f"模型消耗 {usage['tokens']:,} token"
+                        f"（平均 {usage['tokens'] / max(1, summary['agent_used']):,.0f}/文件）")
+        if usage["by_tool"]:
+            bits.append("AI 自调工具：" + "、".join(
+                f"{_esc(k)}×{v}" for k, v in sorted(usage["by_tool"].items(),
+                                                    key=lambda kv: -kv[1])[:6]))
+        usage_note = f"<div class='meta'>{' ｜ '.join(bits)}</div>"
+    if preload["files_preloaded"]:
+        pl_bits = [f"{preload['files_preloaded']} 个文件做过确定性证据前置",
+                   f"共 {preload['chars']:,} 字符",
+                   f"本地采集 {preload['ms'] / 1000:.1f}s（0 token）"]
+        if preload["tools"]:
+            pl_bits.append("预采集工具：" + "、".join(
+                f"{_esc(k)}×{v}" for k, v in sorted(preload["tools"].items(),
+                                                    key=lambda kv: -kv[1])))
+        if preload["truncated"]:
+            pl_bits.append(f"<b class='warn'>{preload['truncated']} 个文件的证据块超预算已降级</b>")
+        usage_note += f"<div class='meta'>{' ｜ '.join(pl_bits)}</div>"
+
+    trace_table = {"结论条数（AI 档）": ev["ai_claims"],                   "有工具出处": ev["attributed"],
                    "无出处（模型推断）": ev["unattributed"],
                    "有出处率（AI 档口径）": _rate_text(ev["attributed_rate"], digits=1),
                    "确定性判定断言（未走 AI，不计入出处率）": ev["deterministic_claims"],
@@ -609,9 +697,12 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
     {_card("断言告警", ev["claim_warnings"], "#b71c1c")}
     {_card("重试过", summary["retry"]["files_with_retry"], "#1565c0")}
     {_card("降级到规则", summary["retry"]["files_degraded"], "#c62828")}
+    {_card("走深挖路径", summary["usage"]["files_deep_dive"], "#1565c0")}
+    {_card("纯读预采集证据", summary["usage"]["files_no_tool_call"], "#2e7d32")}
   </div>
   {sampling_note}
   {retry_note}
+  {usage_note}
   {warnings_block}
 
   <h2>聚合视图</h2>
@@ -644,6 +735,8 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
     <button data-risk="__error__" onclick="setRisk(this)">只看失败</button>
     <button data-risk="__retried__" onclick="setRisk(this)">只看重试</button>
     <button data-risk="__degraded__" onclick="setRisk(this)">只看降级到规则</button>
+    <button data-risk="__deepdive__" onclick="setRisk(this)">只看走了深挖</button>
+    <button data-risk="__preloaded__" onclick="setRisk(this)">只看证据前置</button>
     <span class="dim" id="cnt"></span>
   </div>
   <table id="t">
@@ -675,6 +768,8 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
         || (curRisk === '__error__' ? r.getAttribute('data-error') === '1'
           : curRisk === '__retried__' ? r.getAttribute('data-retried') === '1'
           : curRisk === '__degraded__' ? r.getAttribute('data-degraded') === '1'
+          : curRisk === '__deepdive__' ? r.getAttribute('data-deepdive') === '1'
+          : curRisk === '__preloaded__' ? r.getAttribute('data-preloaded') === '1'
                                       : r.getAttribute('data-risk') === curRisk);
       var okExt = !curExt || r.getAttribute('data-ext') === curExt;
       var okCat = !curCat || r.getAttribute('data-cat') === curCat;

@@ -194,9 +194,17 @@ SYSTEM_PROMPT = """
   MinGW 伪重定位等**正常运行时产物**同样会命中 `allocate or change RWX memory`、
   `execute shellcode via indirect call`、`run PowerShell expression` 这类规则。
   判"文件是否真有该能力"要看命中上下文、导入表与整体形态，**别照着规则名定级**。
+- **确定性证据已经预采集好了**（2026-09-27 起）：送审提示词里的「确定性证据」一段是
+  工具在**本机**对这个文件跑出来的原始输出（PE 结构 / 字符串 / 签名 / capa / floss /
+  脚本 / 宏 / PDF，按文件类型挑的），采集不花你的 token，**与你自己调工具拿到的是同一份输出**
+  （同一个函数、同一份输入）。所以：**默认不必再调工具** —— 证据已经给全，读完再下结论。
+  只有当你对某个具体点有怀疑、而给出的证据**不足以判断**时才调，一次调用回答一个具体问题。
+  **不要为了"自己也取一份证"、或"再确认一遍已经给出的字段"去调工具** —— 那只会拿回同一份数据，
+  外加一整个往返的上下文成本。标着「与文件类型无关」的工具同理，它们对这个文件只会返回"不适用"。
 - 你可以自由选择、组合、重复调用工具，自行决定分析顺序、深度和停止时机。
 - **不要按固定顺序把工具跑一遍**：先看文件是什么（类型、结构），再决定这一份值不值得深挖、
-  该挖哪里。不同文件的分析路径本来就该不一样。
+  该挖哪里。不同文件的分析路径本来就该不一样。实测教训：把工具清单从头到尾刷一遍
+  （平均 8 次调用/文件）换来的结论，和只读预采集证据是一样的 —— 多出来的只是 token。
 - 如果系统提供了 shell/命令工具，你可以自由使用。**只把它用于只读分析**（`file` / `strings` /
   `objdump` / `7z l` / 验签查询这类）；环境会按一份**黑名单**拦掉常见的破坏性、文件落地、
   间接执行与联网命令 —— 但黑名单天然不完备：拦住不等于安全，没拦住也不等于允许。
@@ -209,9 +217,11 @@ SYSTEM_PROMPT = """
 - 所有证据必须来自实际工具返回或命令输出，不能编造。
 
 证据纪律（硬约束，违反会被报告的确定性校验标出来）：
-- **结论必须至少有一条来自你自己调用的工具输出**。送审提示词里给的事实可以引用，
-  但**引用它不算你取到的证据** —— 全部结论都只是复述送审理由的，会被报告标成
-  「未自主取证」，那等于你没干活。
+- **结论必须对得上已给出的证据**：要么对得上送审提示词里列出的事实（预采集的确定性工具
+  输出、YARA 命中位置），要么对得上你自己调用的工具输出。两者都对不上就是凭空推断，
+  会被报告标成「无工具输出支撑（模型推断）」。
+- 送审提示词里给的**预筛理由**（"为什么叫你"）可以引用，但**只复述它不算你干活** ——
+  会被标成「只复述送审理由」。要动的是预采集的工具输出，或者自己取证。
 - **不得把「工具没提供」写成「不存在」**。没有导入表信息 ≠ 没有导入表；没有签名信息 ≠ 没有签名。
 - 数字签名状态**只能**引用 signature_verify 工具结果。工具没给结论、或给出 unknown 时，
   必须写「签名状态未知」，绝不允许写「无签名 / 未签名 / unsigned」。
@@ -362,6 +372,7 @@ def _format_other_signals(evidence: PreliminaryEvidence) -> str:
 def build_scan_prompt(
     evidence: PreliminaryEvidence,
     yara_details: list[dict[str, Any]] | None = None,
+    preload: dict[str, Any] | None = None,
 ) -> str:
     """送审提示词：**给事实，不给判断**。
 
@@ -375,6 +386,9 @@ def build_scan_prompt(
               / 其它预筛信号 / **哪些检测根本没跑**
         · 不给：预筛分数、strong/weak 分档
 
+    2026-09-27 补（确定性证据前置）：`preload` 是本地预采集的工具输出（0 token），
+    渲染成独立的「确定性证据」段，同样**只给事实** —— 载荷与 AI 自己调工具拿到的逐字一致。
+
     为什么要写"哪些检测没跑"：藏掉工具会让 AI 把"没检出"读成"没风险"，
     而真相是"根本没跑"。缺上下文必须显式说明（对照 beenuar/AiSOC 的教训）。
     """
@@ -384,6 +398,7 @@ def build_scan_prompt(
         if unavailable
         else "  （本次所有检测项均可用）"
     )
+    preload_block = _format_preload_section(preload)
     return f"""
 请分析以下文件并给出判定。
 
@@ -391,6 +406,8 @@ def build_scan_prompt(
 SHA256: {evidence.sha256}
 大小: {evidence.size} bytes
 扩展名: {evidence.extension}
+
+{preload_block}
 
 【送审原因 —— 预筛检测到以下信号。这是"为什么叫你"，不是结论】
 {_format_yara_section(evidence, yara_details)}
@@ -404,29 +421,43 @@ SHA256: {evidence.sha256}
 要求：
 - 上面的信号只是送审理由，**不等于结论**。规则命中可能来自文件自身内容
   （源码里的关键字表、规则文件、检测工具自带的模式串），必须结合命中位置的上下文判断。
-- 深入取证请调用工具；先判断这是什么文件、值不值得深入，**不要按固定顺序把工具跑一遍**。
-- 结论里的每一条证据，要么对得上上面列出的事实，要么对得上你自己调用的某次工具输出。
+- **确定性证据已经给全了**（见上面「确定性证据」一段，按文件类型挑的工具输出，
+  与你自己调工具拿到的是同一份）。默认不必再调工具：读完证据再下结论。
+  只有对某个具体点有怀疑、而给出的证据不足以判断时才调一次；
+  **不要为了"自己也取一份证"或"再确认一遍已给出的字段"去调** —— 拿回的是同一份数据。
+- 结论里的每一条证据，要么对得上上面列出的事实（含预采集的工具输出），
+  要么对得上你自己调用的某次工具输出。
 - 未执行的检测项不得当作"已排除"；结论里要体现哪些维度没查。
 - 如果取不到任何支撑，就如实说"证据不足"，不要用常识补全。
 """.strip()
 
 
-def _charge_budget(budget: Any, result: Any) -> None:
-    """Token 预算记账（不改变返回值，也不因记账失败中断分析）。"""
+def _format_preload_section(preload: dict[str, Any] | None) -> str:
+    """渲染「确定性证据」段（本地预采集）。空结果也显式说明，不留白。"""
+    if not preload:
+        return ""
+    from aiav.preload import render_section
+
+    return render_section(preload)
+
+
+def _charge_budget(budget: Any, result: Any) -> int:
+    """Token 预算记账（不改变返回值，也不因记账失败中断分析）。返回本次消耗的 token。"""
     if budget is None:
-        return
+        return 0
     try:
         usage = getattr(result, "usage", None)
         if callable(usage):
             usage = usage()
         # 有 token_scope() 时走并发安全的增量记账；老调用方（无 scope）行为不变
         if hasattr(budget, "charge_scoped"):
-            budget.charge_scoped(usage)
+            tokens = budget.charge_scoped(usage)
         else:
-            budget.charge(usage)
+            tokens = budget.charge(usage)
         budget.note_file()
+        return int(tokens or 0)
     except Exception:  # noqa: BLE001 - 记账失败不影响分析
-        pass
+        return 0
 
 
 def run_agent_with_retry(
@@ -443,6 +474,9 @@ def run_agent_with_retry(
       · 这次判定**用过重试**吗？（retried / attempts / failures）
       · 最后是 AI 判的还是**降级到规则**了？（outcome = ok / degraded_to_rules）
 
+    另外记 `tokens`（本次成功那次的模型消耗，来自 provider 的 usage）——
+    报告里的"每文件多少 token"就是靠它，别再靠估算。
+
     失败的尝试会把自己产生的 `deps.tool_calls` 回滚掉 —— 否则重试会在调用链里
     留下重复记账，读报告的人分不清"调了两次工具"和"重试了一次"。
     """
@@ -456,6 +490,7 @@ def run_agent_with_retry(
         "final_error": None,
         "failures": [],
         "policy": policy.as_dict(),
+        "tokens": 0,
     }
     deps.agent_retry = info
     usage_limits = UsageLimits(request_limit=120, tool_calls_limit=60)
@@ -468,7 +503,7 @@ def run_agent_with_retry(
             verdict = getattr(result, "output", None) or getattr(result, "data", None)
             if verdict is None:
                 raise EmptyAgentResponse("模型返回空输出（没有 Verdict）")
-            _charge_budget(budget, result)
+            info["tokens"] += _charge_budget(budget, result)
             info["outcome"] = "ok"
             return verdict, info
         except Exception as exc:  # noqa: BLE001 - 分类后决定重试还是放弃
@@ -501,6 +536,7 @@ def analyze_file_with_agent(
     deps: ScanDeps,
     evidence: PreliminaryEvidence,
     budget: Any | None = None,
+    preload: dict[str, Any] | None = None,
 ) -> Verdict:
     # YARA 详情只取一次：既渲染进提示词，也存进 deps 供事后证据溯源
     # （`scanner.attribute_evidence` 要用它区分"引用送审事实"和"凭空推断"）。
@@ -509,7 +545,10 @@ def analyze_file_with_agent(
     except Exception:  # noqa: BLE001 - 取详情失败不影响送审
         deps.yara_details = []
     verdict, _info = run_agent_with_retry(
-        agent, build_scan_prompt(evidence, deps.yara_details), deps, budget=budget
+        agent,
+        build_scan_prompt(evidence, deps.yara_details, preload),
+        deps,
+        budget=budget,
     )
     # PydanticAI v2 使用 .output；这里做一下兼容
     return verdict
