@@ -493,6 +493,14 @@ def capa_sigs_dir() -> Path:
     return _pick_capa_dir("CAPA_SIGS", "capa-sigs")
 
 
+def _capa_timeout() -> int:
+    """capa 单文件超时秒数，`CAPA_TIMEOUT` 可覆盖。"""
+    try:
+        return max(10, int(os.getenv("CAPA_TIMEOUT", "180")))
+    except ValueError:
+        return 180
+
+
 def capa_ready() -> tuple[bool, str]:
     """capa 能不能**真的跑起来**。返回 (可用, 不可用原因)。
 
@@ -1557,7 +1565,10 @@ def capa_scan(ctx: RunContext[ScanDeps]) -> str:
     cmd.append(str(ctx.deps.file_path))
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, timeout=180)
+        # 180s 是实测出来的预算：cpack.exe（13.5MB 静态链接）跑 1057 条规则 6 分钟还没完，
+        # 内存吃到 2.8GB。大文件上 capa 必然超时，AI 会如实写"capa 超时未出结果"——
+        # 这是"未查"，不是"没问题"。要放宽就设 CAPA_TIMEOUT。
+        proc = subprocess.run(cmd, capture_output=True, timeout=_capa_timeout())
         capa_stdout = _decode_output(proc.stdout or b"")
         capa_stderr = _decode_output(proc.stderr or b"")
         if proc.returncode != 0 or not capa_stdout.strip():
