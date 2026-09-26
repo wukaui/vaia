@@ -447,19 +447,42 @@ def capa_sigs_dir() -> Path:
     return Path(os.getenv("CAPA_SIGS", str(PROJECT_ROOT / "third_party" / "capa-sigs")))
 
 
+def capa_ready() -> tuple[bool, str]:
+    """capa 能不能**真的跑起来**。返回 (可用, 不可用原因)。
+
+    三样都要：**二进制 + 规则集 + 签名集**。
+
+    ⚠️ 实测（2026-09-26，capa 9.4.0）：
+      · pip 装的 capa 不自带规则 → 报 "default embedded rules not found!"，退出码 10
+      · **没有签名集直接报错退出** → "Using default signature path, but it doesn't
+        exist. Please install the signatures first"，退出码 1、零输出
+    所以只看"二进制在不在"不够 —— 会把必然报错的工具暴露给 AI，每次调用白烧一次往返。
+    """
+    if not _find_exe("capa", env_var="CAPA_EXE"):
+        return False, "未安装（拿不到能力识别与 ATT&CK 映射）"
+    rules = capa_rules_dir()
+    if not rules.is_dir() or not any(rules.iterdir()):
+        return False, (
+            f"已装但缺少规则集（{rules} 不存在或为空；pip 装的 capa 不自带规则，"
+            "需另配 CAPA_RULES，见 README）"
+        )
+    sigs = capa_sigs_dir()
+    if not sigs.is_dir() or not any(sigs.iterdir()):
+        return False, (
+            f"已装但缺少签名集（{sigs} 不存在或为空；capa 没有签名集会直接报错退出，"
+            "需另配 CAPA_SIGS，见 README）"
+        )
+    return True, ""
+
+
 def unavailable_detections() -> list[str]:
     """返回本次环境不可用的检测项及原因（写进送审提示词）。"""
     items: list[str] = []
     if not _find_exe("clamscan", "clamdscan", env_var="CLAMAV_EXE"):
         items.append("ClamAV —— 未安装（没有传统 AV 基线可对照）")
-    if not _find_exe("capa", env_var="CAPA_EXE"):
-        items.append("capa —— 未安装（拿不到能力识别与 ATT&CK 映射）")
-    elif not capa_rules_dir().is_dir():
-        # 装了二进制但没规则集：跑了也是报错，等于没装
-        items.append(
-            f"capa —— 已装但缺少规则集（{capa_rules_dir()} 不存在；"
-            "pip 装的 capa 不自带规则，需另配 CAPA_RULES，见 README）"
-        )
+    capa_ok, capa_why = capa_ready()
+    if not capa_ok:
+        items.append(f"capa —— {capa_why}")
     if not _find_exe("floss", env_var="FLOSS_EXE"):
         items.append("FLOSS —— 未安装（拿不到解混淆/解码字符串）")
     if not os.getenv("VT_API_KEY", "").strip():
@@ -1798,8 +1821,8 @@ def available_tools() -> list:
     """
     tools = [pe_analyze, signature_verify, pdf_analyze, script_analyze,
              office_macro_analyze, strings_ioc]
-    # capa 要**二进制和规则集都有**才暴露 —— 只有二进制的话每次调用都必然报错
-    if _find_exe("capa", env_var="CAPA_EXE") and capa_rules_dir().is_dir():
+    # capa 要**二进制 + 规则集 + 签名集**三样齐了才暴露 —— 缺一样每次调用都必然报错
+    if capa_ready()[0]:
         tools.append(capa_scan)
     if _find_exe("floss", env_var="FLOSS_EXE"):
         tools.append(floss_scan)

@@ -63,20 +63,34 @@ Web UI（可选依赖）：
 | 变量 | 用途 |
 |---|---|
 | `AGENT_API_KEY` / `AGENT_BASE_URL` / `AGENT_MODEL` | LLM 接入（不配则只能 `--no-ai`） |
+| `AGENT_MAX_TOKENS` | **必须 ≥ 16000**。推理模型的思考 token 也算在里面，默认 3000 会被挤爆 → 模型零输出 → 静默降级到规则判定（实测 4/63 个文件失败，其中 2 个降级成 clean） |
 | `AI_AV_STATE_DIR` | 隔离区/白名单/历史/上传目录，默认 `~/ai-av-bench/ai-av-state` |
 | `VT_API_KEY` | VirusTotal 按 hash 查询（可选，不上传样本） |
 | `CAPA_RULES` / `CAPA_SIGS` / `CAPA_EXE` | capa 数据与可执行文件位置（可选） |
 
-## 可选：capa 数据
+## 可选：capa 数据（规则 + 签名，**两样都要**）
 
-capa 的规则与签名体积大（约 11 MB、1000+ 文件），**不进仓库**，需要时拉一次：
+`pip install -e ".[static]"` 装出来的 capa **不自带规则、也不带签名集**，直接跑会报错退出：
+
+```
+ERROR capa: default embedded rules not found! (maybe you installed capa as a library?)
+ERROR capa: Using default signature path, but it doesn't exist. Please install the signatures first
+```
+
+所以需要另外拉一次（体积大、1000+ 文件，**不进仓库**）：
 
 ```bash
 git clone --depth 1 https://github.com/mandiant/capa-rules third_party/capa-rules
-git clone --depth 1 https://github.com/mandiant/capa-rules third_party/capa-sigs
+# 签名集在 capa 主仓库的 sigs/ 里，**没有独立的 capa-sigs 仓库**：
+git clone --depth 1 --filter=blob:none --sparse https://github.com/mandiant/capa third_party/capa-src
+git -C third_party/capa-src sparse-checkout set sigs
+mv third_party/capa-src/sigs third_party/capa-sigs && rm -rf third_party/capa-src
 ```
 
-不装也能跑 —— `capa_scan` 工具会优雅降级并在报告里注明。
+**三样（二进制 + 规则集 + 签名集）齐了 `capa_scan` 才会出现在工具表里。**
+缺任何一样它都不会暴露给 AI，而是由送审提示词的「本次未执行的检测」段声明原因 ——
+这样 AI 知道"这个维度没查"，而不是"查了没问题"。不装完全不影响主流程。
+
 
 ## 测试
 
