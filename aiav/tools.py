@@ -215,10 +215,42 @@ def _decode_output(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def _find_exe(*names: str, env_var: str | None = None) -> str | None:
-    """查找外部工具：环境变量覆盖 → PATH → 当前解释器的 Scripts/bin 目录。
+def _script_dirs() -> list[Path]:
+    """候选的「pip 装出来的可执行文件」目录。
 
-    Windows 下 pip 装的 capa/floss 落在 Scripts\\*.exe，若不在 PATH 里也能找到。
+    ⚠️ **不能用 `Path(sys.executable).resolve().parent`。**
+    venv 里 `bin/python` 是指向系统解释器的**符号链接**，`.resolve()` 会跟过去，
+    parent 变成 `/usr/bin` —— 于是 venv 里 pip 装的 capa/floss **永远找不到**。
+    实测：干净 venv 里装好 capa 后 `_find_exe("capa")` 仍返回 None，
+    只能靠 `CAPA_EXE` 手动指路；这也是为什么之前调 capa 必须显式设环境变量。
+
+    `sysconfig.get_path("scripts")` 是标准做法，它认 venv。
+    """
+    dirs: list[Path] = []
+    try:
+        import sysconfig
+
+        scripts = sysconfig.get_path("scripts")
+        if scripts:
+            dirs.append(Path(scripts))
+    except Exception:  # noqa: BLE001 - 取不到就走兜底
+        pass
+    # 兜底：**不 resolve**，保留 venv 路径；Windows 的 venv 是 Scripts/，POSIX 是 bin/
+    exe_dir = Path(sys.executable).parent
+    dirs += [exe_dir / "Scripts", exe_dir / "bin", exe_dir]
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for d in dirs:
+        if d not in seen:
+            seen.add(d)
+            out.append(d)
+    return out
+
+
+def _find_exe(*names: str, env_var: str | None = None) -> str | None:
+    """查找外部工具：环境变量覆盖 → PATH → 当前 venv 的 Scripts/bin 目录。
+
+    Windows 下 pip 装的 capa/floss 落在 `Scripts\\*.exe`，若不在 PATH 里也能找到。
     """
     if env_var:
         override = os.getenv(env_var)
@@ -228,10 +260,8 @@ def _find_exe(*names: str, env_var: str | None = None) -> str | None:
         found = shutil.which(name)
         if found:
             return found
-    script_dir = Path(sys.executable).resolve().parent
-    candidates = [script_dir / "Scripts", script_dir / "bin", script_dir]
     for name in names:
-        for d in candidates:
+        for d in _script_dirs():
             for suffix in ("", ".exe", ".cmd", ".bat"):
                 p = d / f"{name}{suffix}"
                 if p.exists():
@@ -399,6 +429,24 @@ def yara_match_details(path: Path) -> list[dict[str, Any]]:
 # 这两件事必须分开告诉 AI —— 否则它会把"缺上下文"读成"没风险"
 # （对照 beenuar/AiSOC 的教训：Saying nothing here would let the model read
 #   absence of context as absence of risk）。
+def capa_rules_dir() -> Path:
+    """capa 规则集目录。`CAPA_RULES` 可覆盖，默认 `<项目根>/third_party/capa-rules`。
+
+    ⚠️ **pip 装的 capa 不自带规则**（实测 `flare-capa` 9.4.0：包内 `capa/rules/`
+    是空目录、`capa/sigs/` 根本不存在，直接跑会报
+    "default embedded rules not found! (maybe you installed capa as a library?)" 并退出码 10）。
+    所以规则必须另外准备，见 README。找不到规则时**不该把 capa_scan 暴露给 AI** ——
+    否则每次调用都必然拿回一句 error，白烧一次往返（实测第一轮就是这样：63 个文件
+    里 capa_scan 被调 22 次，全是 "not installed"）。
+    """
+    return Path(os.getenv("CAPA_RULES", str(PROJECT_ROOT / "third_party" / "capa-rules")))
+
+
+def capa_sigs_dir() -> Path:
+    """capa 签名集目录（`CAPA_SIGS` 可覆盖）。同样是 pip 包不自带的外部语料。"""
+    return Path(os.getenv("CAPA_SIGS", str(PROJECT_ROOT / "third_party" / "capa-sigs")))
+
+
 def unavailable_detections() -> list[str]:
     """返回本次环境不可用的检测项及原因（写进送审提示词）。"""
     items: list[str] = []
@@ -406,6 +454,12 @@ def unavailable_detections() -> list[str]:
         items.append("ClamAV —— 未安装（没有传统 AV 基线可对照）")
     if not _find_exe("capa", env_var="CAPA_EXE"):
         items.append("capa —— 未安装（拿不到能力识别与 ATT&CK 映射）")
+    elif not capa_rules_dir().is_dir():
+        # 装了二进制但没规则集：跑了也是报错，等于没装
+        items.append(
+            f"capa —— 已装但缺少规则集（{capa_rules_dir()} 不存在；"
+            "pip 装的 capa 不自带规则，需另配 CAPA_RULES，见 README）"
+        )
     if not _find_exe("floss", env_var="FLOSS_EXE"):
         items.append("FLOSS —— 未安装（拿不到解混淆/解码字符串）")
     if not os.getenv("VT_API_KEY", "").strip():
@@ -1423,8 +1477,8 @@ def capa_scan(ctx: RunContext[ScanDeps]) -> str:
         return json.dumps(result, ensure_ascii=False)
 
     # capa 通过 pip 安装时不自带 rules/sigs，需要显式指定（默认找仓库根的 third_party/）
-    rules_dir = Path(os.getenv("CAPA_RULES", str(PROJECT_ROOT / "third_party" / "capa-rules")))
-    sigs_dir = Path(os.getenv("CAPA_SIGS", str(PROJECT_ROOT / "third_party" / "capa-sigs")))
+    rules_dir = capa_rules_dir()
+    sigs_dir = capa_sigs_dir()
 
     cmd = [exe, "-j"]
     if rules_dir.is_dir():
@@ -1744,7 +1798,8 @@ def available_tools() -> list:
     """
     tools = [pe_analyze, signature_verify, pdf_analyze, script_analyze,
              office_macro_analyze, strings_ioc]
-    if _find_exe("capa", env_var="CAPA_EXE"):
+    # capa 要**二进制和规则集都有**才暴露 —— 只有二进制的话每次调用都必然报错
+    if _find_exe("capa", env_var="CAPA_EXE") and capa_rules_dir().is_dir():
         tools.append(capa_scan)
     if _find_exe("floss", env_var="FLOSS_EXE"):
         tools.append(floss_scan)
