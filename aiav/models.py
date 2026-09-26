@@ -80,6 +80,11 @@ class FileReport(BaseModel):
     archive: dict[str, Any] = Field(default_factory=dict)
     # 缓存命中信息（from_cache / cached_at）
     cache: dict[str, Any] = Field(default_factory=dict)
+    # 模型调用的重试留痕（2026-09-26 修①）：这次判定是**一次过**、**重试过**，
+    # 还是最终**降级到规则判定**。旧实现失败即静默降级，报告里只留一句 error，
+    # 看不出"重试过没有"、也看不出"这条结论其实不是 AI 下的"。
+    # 结构：{attempts, max_attempts, retried, retry_count, outcome, failures[], final_error, policy}
+    agent_retry: dict[str, Any] = Field(default_factory=dict)
 
 
 @dataclass
@@ -94,3 +99,6 @@ class ScanDeps:
     # 用途：证据溯源时把"AI 引用送审事实"和"AI 凭空推断"区分开 ——
     # 送审事实是文件里的真实字节，引用它算有依据；两者都对不上的才算无依据。
     yara_details: list[dict[str, Any]] = field(default_factory=list)
+    # 模型调用的重试留痕（agent.run_agent_with_retry 原地写入）：
+    # 成功与失败两条路都写，`scanner` 据此把"用过重试/降级到规则"记进报告。
+    agent_retry: dict[str, Any] = field(default_factory=dict)

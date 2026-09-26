@@ -163,6 +163,18 @@ def build_summary(reports: list[FileReport]) -> dict[str, Any]:
             "children_scanned": sum(len((r.archive or {}).get("children") or []) for r in reports),
             "truncated": sum(1 for r in reports if (r.archive or {}).get("truncated")),
         },
+        # 模型调用重试留痕（2026-09-26 修①）：用了重试几次、有几条最终降级到规则判定。
+        # 旧实现失败即静默降级，报告里只有一句 error，看不出"这条 clean 其实是规则给的"。
+        "retry": {
+            "files_with_retry": sum(1 for r in reports if (r.agent_retry or {}).get("retried")),
+            "retry_count": sum(int((r.agent_retry or {}).get("retry_count") or 0)
+                               for r in reports),
+            "files_degraded": sum(1 for r in reports
+                                  if (r.agent_retry or {}).get("outcome") == "degraded_to_rules"),
+            "failure_kinds": dict(Counter(
+                f.get("kind", "?") for r in reports
+                for f in ((r.agent_retry or {}).get("failures") or []))),
+        },
         "top_warnings": warnings[:5],
     }
 
@@ -207,6 +219,9 @@ def write_reports(reports: list[FileReport], output_dir: Path,
             "claim_warnings": summary["evidence"]["claim_warnings"],
             "evidence_unattributed": summary["evidence"]["unattributed"],
             "disposition": summary["disposition"],
+            # 模型调用重试（2026-09-26 修①）：让脚本能直接读"重试了几个文件、降级了几个"
+            "files_with_retry": summary["retry"]["files_with_retry"],
+            "files_degraded": summary["retry"]["files_degraded"],
         },
         "aggregate": summary,
         # 逐文件溯源统计：报告正文里每条结论能不能对回工具输出，这里给出可核对的计数
@@ -416,11 +431,30 @@ def _file_row(r: FileReport, index: int) -> str:
         trace_cell = "<span class='dim'>无模型断言</span>"
 
     error = f"<p class='error'>Error: {_esc(r.error)}</p>" if r.error else ""
+    # 重试留痕（2026-09-26 修①）：一眼看出"这条结论是重试拿到的"还是"降级到规则的"
+    retry_html = ""
+    rt = r.agent_retry or {}
+    if rt:
+        outcome = rt.get("outcome")
+        bits = [f"模型调用 {rt.get('attempts', '?')}/{rt.get('max_attempts', '?')} 次"]
+        if rt.get("retried"):
+            bits.append(f"<b>用过重试</b>（{rt.get('retry_count', 0)} 次）")
+        else:
+            bits.append("一次过")
+        if outcome == "degraded_to_rules":
+            bits.append("<b class='error'>最终降级到规则判定</b>")
+        if rt.get("failures"):
+            kinds = ", ".join(sorted({f.get("kind", "?") for f in rt["failures"]}))
+            bits.append(f"错误: {_esc(kinds)}")
+        cls = "disp" if outcome != "degraded_to_rules" else "disp warn"
+        retry_html = f"<div class='{cls}'>{' · '.join(bits)}</div>"
     search_text = " ".join([r.path, r.verdict.category or "", r.verdict.summary or "",
                             " ".join(r.yara_hits or [])])
     return f"""
             <tr data-risk="{_esc(r.verdict.risk.value)}" data-ext="{_esc(r.extension or '(none)')}"
                 data-cat="{_esc(r.verdict.category or 'unknown')}" data-error="{1 if r.error else 0}"
+                data-retried="{1 if rt.get('retried') else 0}"
+                data-degraded="{1 if rt.get('outcome') == 'degraded_to_rules' else 0}"
                 data-text="{_esc(search_text.lower())}" data-idx="{index}">
               <td><code>{_esc(r.path)}</code>{error}</td>
               <td><span class="badge" style="background:{color}">{_esc(r.verdict.risk.value)}</span>
@@ -428,7 +462,7 @@ def _file_row(r: FileReport, index: int) -> str:
               <td>{r.verdict.confidence:.2f}</td>
               <td>{_esc(r.verdict.category)}</td>
               <td>{_esc(r.verdict.summary)}</td>
-              <td>{'是' if r.agent_used else '否'}</td>
+              <td>{'是' if r.agent_used else '否'}{retry_html}</td>
               <td>{trace_cell}</td>
               <td>{disp_html or '-'}{pack_html}{sample_html}</td>
               <td>{evidence_html}{warnings_html}{sources_html}{policy_html}{proposals_html}{trace_html}</td>
@@ -485,6 +519,17 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
         rate = float(summary["sampling"]["mean_agreement"] or 0) * 100
         sampling_note = (f"<div class='meta'>多次采样：{summary['sampling']['files_with_multiple_samples']} "
                          f"个文件，平均一致性 {rate:.0f}%</div>")
+
+    # 重试/降级说明（2026-09-26 修①）：降级不是"没发生"，必须显式写在报告抬头
+    retry_note = ""
+    retry = summary["retry"]
+    if retry["files_with_retry"] or retry["files_degraded"]:
+        kinds = "、".join(f"{k}×{v}" for k, v in retry["failure_kinds"].items()) or "无"
+        retry_note = (
+            f"<div class='meta'>模型调用重试：{retry['files_with_retry']} 个文件用过重试"
+            f"（共 {retry['retry_count']} 次）；<b class='error'>"
+            f"{retry['files_degraded']} 个文件最终降级到规则判定</b>"
+            f"（降级文件的 risk 不是 AI 结论，见明细行）。失败类型：{_esc(kinds)}</div>")
 
     trace_table = {"结论条数（AI 档）": ev["ai_claims"],
                    "有工具出处": ev["attributed"],
@@ -562,8 +607,11 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
     {_card("已白名单", summary["disposition"]["whitelisted"], "#2e7d32")}
     {_card("结论有出处率", _rate_text(ev["attributed_rate"]), "#1565c0")}
     {_card("断言告警", ev["claim_warnings"], "#b71c1c")}
+    {_card("重试过", summary["retry"]["files_with_retry"], "#1565c0")}
+    {_card("降级到规则", summary["retry"]["files_degraded"], "#c62828")}
   </div>
   {sampling_note}
+  {retry_note}
   {warnings_block}
 
   <h2>聚合视图</h2>
@@ -594,6 +642,8 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
     <select id="fExt" onchange="applyFilter()"><option value="">全部类型</option>{ext_options}</select>
     <select id="fCat" onchange="applyFilter()"><option value="">全部家族</option>{cat_options}</select>
     <button data-risk="__error__" onclick="setRisk(this)">只看失败</button>
+    <button data-risk="__retried__" onclick="setRisk(this)">只看重试</button>
+    <button data-risk="__degraded__" onclick="setRisk(this)">只看降级到规则</button>
     <span class="dim" id="cnt"></span>
   </div>
   <table id="t">
@@ -623,7 +673,9 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
       var r = rows[i];
       var okRisk = (curRisk === 'all')
         || (curRisk === '__error__' ? r.getAttribute('data-error') === '1'
-                                    : r.getAttribute('data-risk') === curRisk);
+          : curRisk === '__retried__' ? r.getAttribute('data-retried') === '1'
+          : curRisk === '__degraded__' ? r.getAttribute('data-degraded') === '1'
+                                      : r.getAttribute('data-risk') === curRisk);
       var okExt = !curExt || r.getAttribute('data-ext') === curExt;
       var okCat = !curCat || r.getAttribute('data-cat') === curCat;
       var okText = !q || (r.getAttribute('data-text') || '').indexOf(q) >= 0;

@@ -1518,8 +1518,107 @@ def clamav_scan(ctx: RunContext[ScanDeps]) -> str:
     return summary[:5000]
 
 
+def _capa_detail_budget() -> tuple[int, int, int]:
+    """capa 送审注解的三个预算：最多列几条详情 / 每条 description 截多长 / 整段上限字符。
+
+    为什么要预算：capa 规则库 1000+ 条，恶意样本动辄命中上百条；把 description 全带上
+    会把提示词撑爆。宁可**少列几条并显式标注省略**，也不裸切 JSON。
+    """
+
+    def _int(name: str, default: int) -> int:
+        try:
+            return max(1, int(os.getenv(name, str(default))))
+        except ValueError:
+            return default
+
+    return (_int("CAPA_DETAIL_RULES", 40),
+            _int("CAPA_DESC_CHARS", 200),
+            _int("CAPA_OUTPUT_CHARS", 12000))
+
+
+# capa 送审注解：**关于规则的事实，不是关于被检文件的判断**（2026-09-26 修②）。
+# 背景：良性误报 3 → 5，根因是规则名（allocate or change RWX memory /
+# execute shellcode via indirect call / run PowerShell expression）对 MinGW 伪重定位
+# 与 SEH 运行时的正常产物也会命中 —— 只给规则名，模型会照着名字判可疑。
+# 修法不是加白名单硬压误报，而是把"这条规则在描述什么能力"和"这个文件是否真有该能力"
+# 所需的上下文一并给出：namespace + 规则自带的 description + 这句显式声明。
+CAPA_FACTS_NOTE = (
+    "以下内容全部是「关于 capa 规则的事实」，不是「关于被检文件的判断」。"
+    "rule = 规则名（规则作者起的名字，描述这条规则在找什么代码模式，不是这个文件做了什么）；"
+    "namespace = 该规则在 capa 规则库里的能力分类路径；"
+    "description = 规则作者自带的检测意图说明（null 表示规则库没写，不代表该规则没有行为）；"
+    "scope = 规则生效的粒度。capa 是**模式匹配**：同一段代码模式在编译器运行时"
+    "（CRT 启动、SEH/unwind 展开、MinGW 伪重定位）、语言运行时库、打包器等**正常产物**里"
+    "同样会出现。所以命中只说明「文件的代码与这条模式相符」，"
+    "**不等于文件真的具备该能力** —— 是否具备，要结合命中上下文、导入表、"
+    "其它工具输出和文件整体形态自行判断。"
+)
+
+
+def _capa_rule_details(rules: dict, shown: int, desc_chars: int) -> list[dict]:
+    """把 capa 的规则命中摊成"带 namespace + description 的事实条目"。"""
+    details: list[dict] = []
+    for name in sorted(rules)[:shown]:
+        meta = (rules[name].get("meta") or {})
+        desc = (meta.get("description") or "").strip()
+        entry: dict = {
+            "rule": name,
+            "namespace": meta.get("namespace") or None,
+            "description": desc[:desc_chars] if desc else None,
+        }
+        scope = (meta.get("scopes") or {}).get("static")
+        if scope:
+            entry["scope"] = scope
+        details.append(entry)
+    return details
+
+
+def _capa_result(rules: dict, attack: list[str], mbc: list[str]) -> dict:
+    """组装 capa 送审载荷，并保证**合法 JSON + 有界大小**。
+
+    降级顺序（每一步都在字段里留痕，读报告的人能看出"这里被截了"）：
+      1) 详情只列前 N 条（其余只在 capabilities 里留名字）
+      2) 仍超预算 → 砍 description（标注 descriptions_omitted）
+      3) 仍超预算 → 详情只留前若干条（标注 rule_details_omitted）
+    """
+    shown, desc_chars, budget = _capa_detail_budget()
+    names = sorted(rules)
+    payload: dict = {
+        "_about_this_output": CAPA_FACTS_NOTE,
+        "rule_details": _capa_rule_details(rules, shown, desc_chars),
+        "rules_total": len(rules),
+        "capabilities": names[:120],       # 旧字段保留：纯规则名清单（脚本/兼容用）
+        "attack": attack[:80],
+        "mbc": mbc[:80],
+        "rule_count": len(rules),
+    }
+    payload["rule_details_shown"] = len(payload["rule_details"])
+    if len(names) > shown:
+        payload["rule_details_omitted"] = len(names) - shown
+    if len(json.dumps(payload, ensure_ascii=False)) <= budget:
+        return payload
+    # 2) 砍 description
+    payload["rule_details"] = [
+        {k: v for k, v in d.items() if k != "description"} for d in payload["rule_details"]
+    ]
+    payload["descriptions_omitted"] = True
+    if len(json.dumps(payload, ensure_ascii=False)) <= budget:
+        return payload
+    # 3) 砍详情条数
+    while len(payload["rule_details"]) > 5 and len(json.dumps(payload, ensure_ascii=False)) > budget:
+        keep = max(5, len(payload["rule_details"]) // 2)
+        payload["rule_details"] = payload["rule_details"][:keep]
+    payload["rule_details_shown"] = len(payload["rule_details"])
+    payload["rule_details_omitted"] = len(names) - len(payload["rule_details"])
+    return payload
+
+
 def capa_scan(ctx: RunContext[ScanDeps]) -> str:
-    """调用 mandiant/capa，提取恶意能力和 ATT&CK 映射。"""
+    """调用 mandiant/capa，提取恶意能力和 ATT&CK 映射。
+
+    返回给模型的不只是规则名：每条命中带上 namespace 与规则自带的 description，
+    并在 `_about_this_output` 里显式声明"这些是关于规则的事实，不是对本文件的判断"。
+    """
     exe = _find_exe("capa", env_var="CAPA_EXE")
     if not exe:
         result = {"error": "capa not installed or not in PATH"}
@@ -1551,7 +1650,6 @@ def capa_scan(ctx: RunContext[ScanDeps]) -> str:
         else:
             data = json.loads(capa_stdout)
             rules = data.get("rules", {})
-            capabilities = sorted(rules.keys())[:120]
             attack: set[str] = set()
             mbc: set[str] = set()
             for meta in rules.values():
@@ -1570,12 +1668,7 @@ def capa_scan(ctx: RunContext[ScanDeps]) -> str:
                         mbc.add(f"{mid} {behavior}".strip())
                     else:
                         mbc.add(str(item))
-            result = {
-                "capabilities": capabilities,
-                "attack": sorted(attack)[:80],
-                "mbc": sorted(mbc)[:80],
-                "rule_count": len(rules),
-            }
+            result = _capa_result(rules, sorted(attack), sorted(mbc))
     except subprocess.TimeoutExpired:
         result = {"error": "capa timeout"}
     except Exception as exc:
@@ -1583,7 +1676,9 @@ def capa_scan(ctx: RunContext[ScanDeps]) -> str:
 
     summary = json.dumps(result, ensure_ascii=False)
     _record(ctx, "capa_scan", summary)
-    return summary[:9000]
+    # 载荷已由 _capa_result 按 CAPA_OUTPUT_CHARS 保证合法且有界，这里只做兜底，
+    # 且绝不裸切 JSON（腰斩的 JSON 会让模型看到半个字段，比少几条详情更糟）
+    return summary[: int(os.getenv("CAPA_OUTPUT_CHARS", "12000"))]
 
 
 def floss_scan(ctx: RunContext[ScanDeps]) -> str:

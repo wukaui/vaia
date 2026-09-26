@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import os
+import random
+import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import httpx
 from pydantic_ai import Agent, ModelSettings, UsageLimits
+from pydantic_ai.exceptions import (
+    ContentFilterError,
+    ModelHTTPError,
+    UnexpectedModelBehavior,
+    UsageLimitExceeded,
+    UserError,
+)
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -15,6 +25,128 @@ from aiav.tools import available_tools, unavailable_detections, yara_match_detai
 from pydantic_ai.output import NativeOutput, PromptedOutput, ToolOutput
 
 DEFAULT_USER_AGENT = "ai-av-cli/0.1"
+
+
+class EmptyAgentResponse(RuntimeError):
+    """模型返回了空输出（没有 Verdict）。可重试：下一次请求往往就正常了。"""
+
+
+# ---- 模型调用的退避重试（2026-09-26 修①）-----------------------------------
+# 实测（Dike pilot 40 样本）：8 次调用失败 —— 6 次 provider 侧
+# `400 Upstream request failed: Invalid request parameters`、2 次
+# `Exceeded maximum output retries (3)`，全部挂在**第一次模型请求**上（工具调用 0 次）。
+# 旧实现零重试，直接降级成纯规则判定 → 4 个恶意样本被判 clean。
+#
+# 只对"可重试类"错误重试：provider 侧上游 400 / 5xx / 429、网络抖动、空响应、输出截断。
+# 确定性的参数错误（401/403/404、非上游的 400）重试多少次都一样，直接放弃 ——
+# 无限重试只会把一次失败拖成 N 倍延迟，还照样降级。
+RETRYABLE_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 524}
+# provider 把"上游抖动"包成 400 的两种情况（deepseek/opencode 网关实测文案）
+UPSTREAM_400_MARKERS = (
+    "upstream request failed",
+    "invalid request parameters",
+    "please check your input and try again",
+)
+# 输出被截断 / 模型没吐出结构化结果 —— 换一次请求有机会成功
+TRUNCATION_MARKERS = (
+    "exceeded maximum output retries",
+    "token limit",
+    "exceeded before any response",
+    "output retries",
+)
+
+
+def _error_text(exc: BaseException) -> str:
+    parts = [str(exc)]
+    body = getattr(exc, "body", None)
+    if body is not None:
+        parts.append(str(body))
+    return " ".join(parts).lower()
+
+
+def classify_agent_error(exc: BaseException) -> tuple[bool, str]:
+    """把模型调用异常分成「可重试 / 不可重试」两类，返回 (retryable, kind)。
+
+    kind 会原样写进报告的 `agent_retry.failures[].kind`，方便事后统计
+    "到底哪一类错误在拖后腿"。
+    """
+    if isinstance(exc, httpx.TransportError):       # 含 TimeoutException
+        return True, "network"
+    if isinstance(exc, EmptyAgentResponse):
+        return True, "empty_response"
+    if isinstance(exc, ModelHTTPError):
+        status = int(getattr(exc, "status_code", 0) or 0)
+        text = _error_text(exc)
+        if status in RETRYABLE_STATUS or status >= 500:
+            return True, f"http_{status}"
+        if status == 400:
+            if any(m in text for m in UPSTREAM_400_MARKERS):
+                return True, "provider_upstream_400"
+            return False, "http_400_deterministic"
+        return False, f"http_{status}_deterministic"
+    if isinstance(exc, UnexpectedModelBehavior):
+        if any(m in _error_text(exc) for m in TRUNCATION_MARKERS):
+            return True, "output_truncated"
+        return False, "unexpected_model_behavior"
+    if isinstance(exc, (UsageLimitExceeded, ContentFilterError, UserError)):
+        return False, f"non_retryable_{type(exc).__name__}"
+    return False, f"unclassified_{type(exc).__name__}"
+
+
+@dataclass(frozen=True)
+class RetryPolicy:
+    """重试策略：次数 + 指数退避 + 抖动。"""
+
+    retries: int
+    base_delay: float
+    max_delay: float
+    jitter: float
+
+    @property
+    def max_attempts(self) -> int:
+        return self.retries + 1
+
+    def delay_for(self, attempt: int, rng: random.Random | None = None) -> float:
+        """第 attempt 次失败后的等待秒数（attempt 从 1 起）。"""
+        if self.base_delay <= 0:
+            return 0.0
+        raw = min(self.max_delay, self.base_delay * (2 ** (attempt - 1)))
+        rng = rng or random
+        return round(max(0.0, raw * (1.0 + rng.uniform(-self.jitter, self.jitter))), 3)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "retries": self.retries,
+            "base_delay": self.base_delay,
+            "max_delay": self.max_delay,
+            "jitter": self.jitter,
+        }
+
+
+def _retry_policy() -> RetryPolicy:
+    """默认 2 次重试 + 指数退避（1s/2s）+ ±30% 抖动，可用环境变量覆盖。"""
+
+    def _num(name: str, default: float) -> float:
+        try:
+            return float(os.getenv(name, str(default)))
+        except ValueError:
+            return default
+
+    return RetryPolicy(
+        retries=max(0, int(_num("AGENT_RETRIES", 2))),
+        base_delay=max(0.0, _num("AGENT_RETRY_BASE_DELAY", 1.0)),
+        max_delay=max(0.0, _num("AGENT_RETRY_MAX_DELAY", 20.0)),
+        jitter=min(1.0, max(0.0, _num("AGENT_RETRY_JITTER", 0.3))),
+    )
+
+
+def _attach_retry_info(exc: BaseException, info: dict[str, Any]) -> BaseException:
+    """把重试留痕挂到异常上，让上层降级时能原样写进报告。"""
+    try:
+        exc.retry_info = info  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - 挂不上不影响主流程
+        pass
+    return exc
 
 
 def _output_spec():
@@ -57,6 +189,11 @@ SYSTEM_PROMPT = """
 - **你的活是解读，不是重演。** 同一条规则命中，可能是真载荷，也可能来自文件自身内容
   （源码里的关键字表、规则文件、检测工具自带的模式串）。要结合命中位置的上下文判断，
   必要时调工具取证。**把送审理由换个说法写进 evidence，不算完成了分析。**
+- **规则名是模式匹配的标签，不是关于这个文件的结论**（2026-09-26 补）。`capa_scan` 返回的
+  namespace / description 描述的是"这条规则在找什么模式"；CRT 启动、SEH/unwind 展开、
+  MinGW 伪重定位等**正常运行时产物**同样会命中 `allocate or change RWX memory`、
+  `execute shellcode via indirect call`、`run PowerShell expression` 这类规则。
+  判"文件是否真有该能力"要看命中上下文、导入表与整体形态，**别照着规则名定级**。
 - 你可以自由选择、组合、重复调用工具，自行决定分析顺序、深度和停止时机。
 - **不要按固定顺序把工具跑一遍**：先看文件是什么（类型、结构），再决定这一份值不值得深挖、
   该挖哪里。不同文件的分析路径本来就该不一样。
@@ -274,6 +411,91 @@ SHA256: {evidence.sha256}
 """.strip()
 
 
+def _charge_budget(budget: Any, result: Any) -> None:
+    """Token 预算记账（不改变返回值，也不因记账失败中断分析）。"""
+    if budget is None:
+        return
+    try:
+        usage = getattr(result, "usage", None)
+        if callable(usage):
+            usage = usage()
+        # 有 token_scope() 时走并发安全的增量记账；老调用方（无 scope）行为不变
+        if hasattr(budget, "charge_scoped"):
+            budget.charge_scoped(usage)
+        else:
+            budget.charge(usage)
+        budget.note_file()
+    except Exception:  # noqa: BLE001 - 记账失败不影响分析
+        pass
+
+
+def run_agent_with_retry(
+    agent: Agent,
+    prompt: str,
+    deps: ScanDeps,
+    budget: Any | None = None,
+    policy: RetryPolicy | None = None,
+    rng: random.Random | None = None,
+) -> tuple[Verdict, dict[str, Any]]:
+    """带退避重试地跑一次 Agent，返回 (Verdict, 重试留痕)。
+
+    留痕（写进报告的 `agent_retry`）回答两个问题：
+      · 这次判定**用过重试**吗？（retried / attempts / failures）
+      · 最后是 AI 判的还是**降级到规则**了？（outcome = ok / degraded_to_rules）
+
+    失败的尝试会把自己产生的 `deps.tool_calls` 回滚掉 —— 否则重试会在调用链里
+    留下重复记账，读报告的人分不清"调了两次工具"和"重试了一次"。
+    """
+    policy = policy or _retry_policy()
+    info: dict[str, Any] = {
+        "attempts": 0,
+        "max_attempts": policy.max_attempts,
+        "retried": False,
+        "retry_count": 0,
+        "outcome": "degraded_to_rules",
+        "final_error": None,
+        "failures": [],
+        "policy": policy.as_dict(),
+    }
+    deps.agent_retry = info
+    usage_limits = UsageLimits(request_limit=120, tool_calls_limit=60)
+    last_exc: BaseException | None = None
+    for attempt in range(1, policy.max_attempts + 1):
+        info["attempts"] = attempt
+        mark = len(deps.tool_calls)
+        try:
+            result = agent.run_sync(prompt, deps=deps, usage_limits=usage_limits)
+            verdict = getattr(result, "output", None) or getattr(result, "data", None)
+            if verdict is None:
+                raise EmptyAgentResponse("模型返回空输出（没有 Verdict）")
+            _charge_budget(budget, result)
+            info["outcome"] = "ok"
+            return verdict, info
+        except Exception as exc:  # noqa: BLE001 - 分类后决定重试还是放弃
+            del deps.tool_calls[mark:]
+            retryable, kind = classify_agent_error(exc)
+            entry = {
+                "attempt": attempt,
+                "kind": kind,
+                "retryable": retryable,
+                "error": f"{type(exc).__name__}: {exc}"[:400],
+            }
+            info["failures"].append(entry)
+            info["final_error"] = entry["error"]
+            last_exc = exc
+            if not retryable or attempt >= policy.max_attempts:
+                break
+            delay = policy.delay_for(attempt, rng)
+            entry["sleep_s"] = delay
+            info["retried"] = True
+            info["retry_count"] += 1
+            if delay:
+                time.sleep(delay)
+    info["outcome"] = "degraded_to_rules"
+    assert last_exc is not None
+    raise _attach_retry_info(last_exc, info)
+
+
 def analyze_file_with_agent(
     agent: Agent,
     deps: ScanDeps,
@@ -286,24 +508,8 @@ def analyze_file_with_agent(
         deps.yara_details = yara_match_details(Path(evidence.path))
     except Exception:  # noqa: BLE001 - 取详情失败不影响送审
         deps.yara_details = []
-    result = agent.run_sync(
-        build_scan_prompt(evidence, deps.yara_details),
-        deps=deps,
-        usage_limits=UsageLimits(request_limit=120, tool_calls_limit=60),
+    verdict, _info = run_agent_with_retry(
+        agent, build_scan_prompt(evidence, deps.yara_details), deps, budget=budget
     )
-    # Token 预算记账（不改变返回值）
-    if budget is not None:
-        try:
-            usage = getattr(result, "usage", None)
-            if callable(usage):
-                usage = usage()
-            # 有 token_scope() 时走并发安全的增量记账；老调用方（无 scope）行为不变
-            if hasattr(budget, "charge_scoped"):
-                budget.charge_scoped(usage)
-            else:
-                budget.charge(usage)
-            budget.note_file()
-        except Exception:  # noqa: BLE001 - 记账失败不影响分析
-            pass
     # PydanticAI v2 使用 .output；这里做一下兼容
-    return getattr(result, "output", None) or getattr(result, "data")
+    return verdict

@@ -962,6 +962,56 @@ def _risk_rank(risk: RiskLevel) -> int:
     return {RiskLevel.clean: 0, RiskLevel.suspicious: 1, RiskLevel.malicious: 2}[risk]
 
 
+def merge_retry_infos(infos: list[dict]) -> dict:
+    """把多次采样各自的模型调用留痕合并成一条报告字段。
+
+    口径：`attempts` 取各样本之和（一共发了几次请求），`retried` 任一为真即真
+    （只要有一条结论是重试拿到的，这次判定就该标"用过重试"），
+    `outcome` 任一降级即降级 —— 采样里有一路掉到规则判定，就不能说"全是 AI 判的"。
+    """
+    infos = [i for i in infos if i]
+    if not infos:
+        return {}
+    if len(infos) == 1:
+        return infos[0]
+    failures = [f for i in infos for f in (i.get("failures") or [])]
+    return {
+        "attempts": sum(int(i.get("attempts") or 0) for i in infos),
+        "max_attempts": sum(int(i.get("max_attempts") or 0) for i in infos),
+        "retried": any(i.get("retried") for i in infos),
+        "retry_count": sum(int(i.get("retry_count") or 0) for i in infos),
+        "outcome": ("degraded_to_rules" if any(
+            i.get("outcome") == "degraded_to_rules" for i in infos) else "ok"),
+        "final_error": next((i.get("final_error") for i in infos
+                             if i.get("outcome") == "degraded_to_rules"), None),
+        "failures": failures,
+        "policy": infos[0].get("policy") or {},
+        "samples": len(infos),
+        "per_sample_outcome": [i.get("outcome") for i in infos],
+    }
+
+
+def _degrade_note(exc: BaseException, retry: dict) -> str:
+    """降级说明：**必须写清试了几次、重试了几次、为什么停**。
+
+    旧实现只有一句 `Agent 调用失败，已降级到规则判断: <err>` —— 读报告的人看不出
+    这是"一次过就失败"还是"重试两次都失败"，也看不出底下那条 clean 是规则给的。
+    """
+    attempts = int(retry.get("attempts") or 0)
+    max_attempts = int(retry.get("max_attempts") or 0)
+    retry_count = int(retry.get("retry_count") or 0)
+    kinds = sorted({f.get("kind", "?") for f in (retry.get("failures") or [])})
+    if attempts <= 1 and not retry_count:
+        how = "未重试（首次调用即失败"
+        how += "，错误判定为不可重试" if kinds and kinds != ["?"] else ""
+        how += "）"
+    else:
+        how = f"已尝试 {attempts}/{max_attempts} 次（重试 {retry_count} 次）后放弃"
+    detail = f"；错误类型: {', '.join(kinds)}" if kinds else ""
+    return (f"Agent 调用失败，已降级到规则判定（{how}{detail}）：{exc}"
+            f" —— 本条 risk 由规则/启发式给出，不是 AI 结论")
+
+
 def merge_sampled_verdicts(verdicts: list[Verdict]) -> tuple[Verdict, dict]:
     """多次采样的结论合并：多数票；平票取更严的一档。
 
@@ -1193,6 +1243,8 @@ def scan_file(
     # 判决权归 AI：这一轮定级是不是 AI 自主下的？是 → 任何确定性后处理都不许再改 risk。
     ai_verdict_taken = False
     agent_trace: list[dict] = []
+    # 模型调用重试留痕（2026-09-26 修①）：默认空 = 这条路压根没走 AI（规则档/缓存/低分放行）
+    agent_retry: dict = {}
     error: str | None = None
     audit = []
     evidence_sources: list[dict] = []
@@ -1277,6 +1329,7 @@ def scan_file(
         verdict = heuristic_verdict(evidence)
         evidence_sources = attribute_evidence(verdict.evidence, agent_trace, agent_used=False)
     elif agent is not None and evidence.prefilter_score >= ai_threshold:
+        retry_infos: list[dict] = []
         try:
             verdicts: list[Verdict] = []
             agent_trace = []
@@ -1298,10 +1351,13 @@ def scan_file(
                         }
                     )
                 verdicts.append(analyze_file_with_agent(agent, deps, evidence, budget=budget))
+                # 重试留痕：成功也要记（"这次是重试第 2 次才拿到的结论"本身就是信息）
+                retry_infos.append(dict(getattr(deps, "agent_retry", None) or {}))
                 if samples > 1:
                     agent_trace.extend({**c, "sample": i + 1} for c in deps.tool_calls)
                 else:
                     agent_trace = deps.tool_calls
+            agent_retry = merge_retry_infos(retry_infos)
             verdict, sampling = merge_sampled_verdicts(verdicts)
             audit = []
             ai_verdict_taken = True       # 从这里开始的 risk 是 AI 自主结论
@@ -1328,7 +1384,11 @@ def scan_file(
                               + find_repetition_warnings(evidence_sources, agent_trace))
             claim_warnings = list(dict.fromkeys(claim_warnings))
         except Exception as exc:
-            error = f"Agent 调用失败，已降级到规则判断: {exc}"
+            # 降级必须**看得见**：把"试了几次 / 重试了几次 / 为什么放弃"写进 error，
+            # 不允许报告里只留一句"失败了"，让读的人以为这条结论是 AI 下的。
+            agent_retry = (getattr(exc, "retry_info", None)
+                           or (retry_infos[-1] if retry_infos else {}))
+            error = _degrade_note(exc, agent_retry)
             verdict = heuristic_verdict(evidence)
     else:
         verdict = heuristic_verdict(evidence)
@@ -1457,6 +1517,7 @@ def scan_file(
         packing=packing,
         sampling=sampling,
         archive=archive_info,
+        agent_retry=agent_retry,
         disposition=({"status": "previously_quarantined", "id": prev.get("id")}
                      if prev and prev.get("status") == "quarantined" else {}),
     )
