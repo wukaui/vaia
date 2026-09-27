@@ -1,30 +1,38 @@
 #!/usr/bin/env python3
 """真实分布实测的**汇总口径**：把散在几个产物里的数拉成一张表（报告里的数就是这个脚本打的）。
 
-输入三份产物（都由别的脚本产出，这里只读、不重算判定）：
+输入产物（都由别的脚本/一轮扫描产出，这里只读、不重算判定）：
 
-  · `--measure`    `scripts/measure_deterministic.py` 的 JSON —— ①层那一臂（无 AI）
-  · `--ai-report`  `aiav scan --ai-threshold 0` 的 JSON —— "全部送 AI"对照臂
+  · `--measure`    `scripts/measure_deterministic.py` 的 JSON —— ①层那一臂（无 AI，全量实测）
+  · `--ai-report`  `aiav scan --ai-threshold 0` 的 JSON —— "全部送 AI"对照臂（全量实测）
+  · `--manifest` / `--corpus-root` 语料清单（抽样要用它的类别 / 来源池）
   · `--unit-price` 单价（元/百万 token），默认取 `aiav/budget.py` 里唯一定义的那一处
 
 四个数（本轮交付）：
-  1. **送审率**  = ①层处置为 `send_ai` 的文件 / 总数
-  2. **①层结案率** =（确定性判恶意 + 确定性判干净）/ 总数
-  3. **召回**（①层口径）= 恶意文件里被"确定性判恶意"或"送 AI"覆盖的比例
-  4. **成本** = token 总量 / 按单价折的钱 / 平均每文件
+  1. **送审率**  = ①层处置为 `send_ai` 的文件 / 总数      —— 实测，全量
+  2. **①层结案率** =（确定性判恶意 + 确定性判干净）/ 总数   —— 实测，全量
+  3. **召回**（①层口径）= 恶意文件里被"确定性判恶意"或"送 AI"覆盖的比例 —— 实测，全量
+  4. **成本** = token 总量 / 按单价折的钱 / 平均每文件     —— 生产档是实测；对照臂是**抽样 + 外推**
 
-对照臂的算法写死在这里，免得每次换说法：
+口径变更（2026-09-27，李沫儒的补充指令："抽样吧"）—— 写死在这里，免得每次换说法：
+  · 对照臂**不再全量跑**：分层抽 48 个（与语料同为 6.25% 恶意，固定 seed，清单在产物里），
+    只算这批的每文件均值，再乘语料规模 —— **乘出来的数一律标"外推"**，
+    和实测数**分块存、分表印**，不许混在一张表里当实测值用。
+  · 对照臂**在指令到达前已经全量跑完了**（319 个文件 / 273 个进 AI / 2,195,054 token）：
+    按"不用推翻重来"的指示，那一轮**原样保留当实测参照**（`ai_arm_full_run_measured`），
+    本轮**没有再调一次模型**（0 token）。
   · `gate 0` 那一轮**并不是真的 320/320 都进 AI** —— 确定性结案的（ClamAV 命中、签名可信）
-    在送审前就短路了。所以实测到的是"274 个进了 AI"。
-  · "全部送 AI"的成本 = **实测每文件均值 × 语料总数**（外推，不是又跑一遍）。
-    外推口径在报告里必须写明，不许当成实测值。
+    在送审前就短路了。所以实测到的是"273 个进了 AI"，320 那个数是外推。
 
 用法：
 
     .venv/bin/python scripts/real_dist_summary.py \
         --measure /tmp/real-dist-out/measure_gate300_*.json \
         --ai-report /tmp/real-dist-ai-out/scan_*.json \
-        --out /tmp/real-dist-summary.json
+        --manifest /tmp/real-dist-320/manifest.json \
+        --corpus-root /tmp/real-dist-320/files \
+        --wall-clock-s 2460 --out bench/real-dist-320/summary.json \
+        --sample-out bench/real-dist-320/ai_arm_sample.json
 """
 
 from __future__ import annotations
@@ -33,10 +41,16 @@ import argparse
 import glob
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from sample_ai_arm import (DEFAULT_N as SAMPLE_N, DEFAULT_SEED as SAMPLE_SEED,
+                           draw_sample, load_corpus, outcome_of,
+                           load_one as load_artifact, summarize as summarize_sample)
 
 
 def load_one(pattern: str) -> dict:
@@ -52,6 +66,12 @@ def main() -> int:
     ap.add_argument("--measure", required=True, help="measure_deterministic.py 的 JSON（支持通配）")
     ap.add_argument("--ai-report", required=True, help="gate 0 那一轮的 scan JSON（支持通配）")
     ap.add_argument("--corpus", default=None, help="measure JSON 里的语料名（默认取第一个）")
+    ap.add_argument("--manifest", default=None, help="语料 manifest.json（抽样要类别 / 来源池；不给就不出抽样块）")
+    ap.add_argument("--corpus-root", default="/tmp/real-dist-320/files", help="语料目录")
+    ap.add_argument("--sample-n", type=int, default=SAMPLE_N, help=f"抽样个数（默认 {SAMPLE_N}）")
+    ap.add_argument("--sample-seed", type=int, default=SAMPLE_SEED, help=f"抽样种子（默认 {SAMPLE_SEED}）")
+    ap.add_argument("--wall-clock-s", type=float, default=None, help="对照臂整臂墙钟秒数（摊每文件耗时）")
+    ap.add_argument("--sample-out", type=Path, default=None, help="抽样产物（含抽中的文件清单）")
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args()
 
@@ -89,14 +109,17 @@ def main() -> int:
         "errors": s["errors"],
     }
 
-    # ---- "全部送 AI"对照臂（gate 0，实测） ----
+    # ---- "全部送 AI"对照臂：**全量那一轮**（实测；指令到达前已跑完，原样保留当参照） ----
     ai = load_one(args.ai_report)
     reports = ai.get("reports") or []
     sent = [r for r in reports if r.get("agent_used")]
     tokens_by_file = {r["path"]: int(((r.get("agent_usage") or {}).get("tokens")) or 0) for r in sent}
     total_tokens = sum(tokens_by_file.values())
     mean_tokens = total_tokens / len(sent) if sent else 0
-    ai_arm = {
+    ai_arm_full = {
+        "kind": "measured",
+        "scope": "full-run",
+        "note": "指令到达前那一轮已经全量跑完（13:47 结束 / 墙钟 41 分钟）；本轮没有再调模型，0 token",
         "files_scanned": ai.get("total"),
         "files_reaching_ai": len(sent),
         "tokens_measured": total_tokens,
@@ -108,13 +131,71 @@ def main() -> int:
         "files_degraded": (ai.get("summary") or {}).get("files_with_retry"),
     }
 
-    # ---- 对照：全部送 AI 的成本（外推，口径写在这里） ----
-    all_ai_tokens = round(mean_tokens * n)
+    # ---- 对照臂的**正式口径**：分层抽样 + 按规模外推（不再全量跑） ----
+    sample_blocks: dict = {}
+    sample_payload: dict | None = None
+    if args.manifest:
+        manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+        corpus = load_corpus(manifest, Path(args.corpus_root))
+        picked = draw_sample(corpus, args.sample_n, args.sample_seed)
+        rows = {r["path"]: r for r in reports}
+        per_file = []
+        for r in picked:
+            row = rows.get(r["path"])
+            usage = (row or {}).get("agent_usage") or {}
+            reached = bool(row and row.get("agent_used"))
+            per_file.append({**{k: r[k] for k in ("name", "label", "pool", "sha256", "bytes")},
+                             "path": r["path"], "in_ai_report": row is not None,
+                             "reached_ai": reached, "outcome": outcome_of(row),
+                             "tokens": int(usage.get("tokens") or 0) if reached else None,
+                             "preload_ms": (round(usage["preload_ms"], 1)
+                                            if reached and usage.get("preload_ms") is not None else None),
+                             "tool_calls": usage.get("tool_calls") if reached else None,
+                             "risk": ((row or {}).get("verdict") or {}).get("risk") if reached else None})
+        full_run = {"files_reaching_ai": len(sent), "tokens": total_tokens,
+                    "mean_tokens_per_ai_file": mean_tokens,
+                    "files_sent_to_ai": sum(1 for r in reports if r.get("agent_used") or r.get("error")),
+                    "files_degraded_to_rules": sum(1 for r in reports
+                                                   if not r.get("agent_used") and r.get("error"))}
+        sample_blocks = summarize_sample(picked, per_file, len(corpus),
+                                        CNY_PER_MILLION_TOKENS, args.wall_clock_s,
+                                        len(sent) or None, full_run)
+        n_mal = len([r for r in corpus if r["label"] == "malicious"])
+        sample_payload = {
+            "kind": "ai-arm-sampling",
+            "corpus": {"total": len(corpus),
+                       "by_label": {k: len([r for r in corpus if r["label"] == k])
+                                    for k in sorted({r["label"] for r in corpus})},
+                       "malicious_ratio": round(n_mal / len(corpus), 4)},
+            "method": {"stratified_by": "类别 × 来源池（按各层占比分配名额，最大余数法）",
+                       "seed": args.sample_seed, "n": args.sample_n,
+                       "order": "层内按文件名排序后 random.Random(seed).sample（可复现）"},
+            "sample_ratio": {
+                "malicious": round(len([f for f in per_file if f["label"] == "malicious"])
+                                   / len(per_file), 4),
+                "matches_corpus": (len([f for f in per_file if f["label"] == "malicious"]) / len(per_file)
+                                   == n_mal / len(corpus))},
+            **sample_blocks,
+            "files": per_file,
+        }
+        if args.sample_out:
+            args.sample_out.parent.mkdir(parents=True, exist_ok=True)
+            args.sample_out.write_text(json.dumps(sample_payload, ensure_ascii=False, indent=2),
+                                       encoding="utf-8")
+
+    # ---- 对照：全部送 AI 的成本（**外推**，口径写在这里） ----
+    sample_mean = (sample_blocks.get("sample_measured", {}).get("mean_tokens_per_ai_file")
+                   if sample_blocks else round(mean_tokens, 1))
+    sample_basis = (f"抽样实测均值 {sample_mean} token/文件 × 语料 {n} 个文件"
+                    if sample_blocks else f"实测每文件均值 {round(mean_tokens, 1)} token × 语料 {n} 个文件")
+    all_ai_tokens = round(sample_mean * n)
     counterfactual = {
-        "basis": f"实测每文件均值 {round(mean_tokens, 1)} token × 语料 {n} 个文件（外推，不是实测）",
+        "kind": "extrapolated",
+        "scope": "corpus",
+        "basis": f"{sample_basis}（外推，不是实测）",
         "tokens": all_ai_tokens,
         "cny": round(all_ai_tokens / 1_000_000 * CNY_PER_MILLION_TOKENS, 2),
-        "tokens_per_file": round(mean_tokens, 1),
+        "tokens_per_file": sample_mean,
         "unit_price_cny_per_million": CNY_PER_MILLION_TOKENS,
         "note": "单价是项目里唯一定义的那一处（偏高的一档），不是服务商报价单",
     }
@@ -123,12 +204,16 @@ def main() -> int:
                             for r in reports
                             if (r.get("deterministic") or {}).get("disposition") == "send_ai")
     production = {
+        "kind": "measured",
+        "scope": "production-gate-300",
         "files_sent": s["sent"],
         "tokens": production_tokens,
         "cny": round(production_tokens / 1_000_000 * CNY_PER_MILLION_TOKENS, 2),
         "note": "送审文件的 token 取自对照臂的同一条流水线（同一路径、同一预采集），不是另跑一轮",
     }
     saved = {
+        "kind": "derived",
+        "note": "「全部送 AI」那一列是外推值，所以省下的量也带着外推口径；生产档那一列是实测",
         "files": n - s["sent"],
         "tokens": all_ai_tokens - production_tokens,
         "cny": round((all_ai_tokens - production_tokens) / 1_000_000 * CNY_PER_MILLION_TOKENS, 2),
@@ -172,9 +257,13 @@ def main() -> int:
     }
 
     payload = {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "kind_note": "每个块都带 `kind`：measured = 实测，extrapolated = 外推，derived = 由两者算出。"
+                     "**外推的数不许当实测值用**",
         "layer1_arm": layer1_arm,
         "ablation_without_clamav": ablation,
-        "ai_arm_gate0": ai_arm,
+        "ai_arm_full_run_measured": ai_arm_full,
+        "ai_arm_sampled": sample_blocks or None,
         "counterfactual_all_ai": counterfactual,
         "production_gate300": production,
         "saved": saved,
@@ -197,13 +286,40 @@ def main() -> int:
     print(f"  核验          一致率 {layer1_arm['consistency']} · 核验通过 {layer1_arm['verification_ok']} · "
           f"未分类信号 {layer1_arm['unclassified_signals']} · 错误 {layer1_arm['errors']}")
     print()
-    print(f"对照臂（gate 0，全部送 AI）· 扫 {ai_arm['files_scanned']} 个 · "
-          f"真进 AI {ai_arm['files_reaching_ai']} 个 · {ai_arm['tokens_measured']:,} token · "
-          f"均值 {ai_arm['mean_tokens_per_ai_file']:,}/文件")
-    print(f"  全部送 AI（外推 320）: {counterfactual['tokens']:,} token ≈ "
-          f"¥{counterfactual['cny']}（单价 ¥{counterfactual['unit_price_cny_per_million']}/百万）")
-    print(f"  生产档（gate 300）实际: {production['tokens']:,} token ≈ ¥{production['cny']}")
-    print(f"  省下: {saved['files']} 个文件送审 · {saved['tokens']:,} token ≈ ¥{saved['cny']}"
+    print("【实测】对照臂·全量（指令到达前已跑完，本轮 0 token）")
+    print(f"  gate 0 · 扫 {ai_arm_full['files_scanned']} 个 · 真进 AI {ai_arm_full['files_reaching_ai']} 个 · "
+          f"{ai_arm_full['tokens_measured']:,} token · 均值 {ai_arm_full['mean_tokens_per_ai_file']:,}/文件")
+    if sample_blocks:
+        m = sample_blocks["sample_measured"]
+        c = sample_blocks.get("sampling_check_vs_full_run") or {}
+        print()
+        print(f"【实测】对照臂·抽样（seed={args.sample_seed} · n={m['files_drawn']} · "
+              f"恶意占比 {sample_payload['sample_ratio']['malicious']:.4f}"
+              f"（语料 {sample_payload['corpus']['malicious_ratio']:.4f}，一致="
+              f"{sample_payload['sample_ratio']['matches_corpus']}））")
+        print(f"  真进 AI {m['files_reaching_ai']} 个 · {m['tokens_measured']:,} token · "
+              f"均值 {m['mean_tokens_per_ai_file']:,}/文件（中位 {m['median_tokens_per_ai_file']:,}）· "
+              f"均值 ¥{m['mean_cny_per_ai_file']}/文件")
+        print(f"  预采集 {m['mean_preload_ms_per_ai_file']:,} ms/文件"
+              + (f" · 整臂墙钟摊 {m['wall_clock_s_per_ai_file_amortized']}s/文件（摊算，非逐文件计时）"
+                 if m["wall_clock_s_per_ai_file_amortized"] is not None else ""))
+        if c:
+            print(f"  抽样代表性（拿全量实测当参照）: 均值偏差 "
+                  f"{c['sample_vs_full_mean_delta_pct']:+.2f}% · 同口径总量偏差 "
+                  f"{c['sample_vs_full_total_delta_pct']:+.2f}%")
+    print()
+    print("【外推】全部送 AI（= 抽样均值 × 语料规模；**不是实测**）")
+    print(f"  {counterfactual['basis']}")
+    print(f"  {counterfactual['tokens']:,} token ≈ ¥{counterfactual['cny']}"
+          f"（单价 ¥{counterfactual['unit_price_cny_per_million']}/百万）")
+    if sample_blocks and sample_blocks["extrapolated"].get("same_scope"):
+        ss = sample_blocks["extrapolated"]["same_scope"]
+        print(f"  同口径（× 实测进 AI 的 {ai_arm_full['files_reaching_ai']} 个）: "
+              f"{ss['tokens']:,} token ≈ ¥{ss['cny']}")
+    print()
+    print("【实测】生产档（gate 300）")
+    print(f"  送审 {production['files_sent']} 个 · {production['tokens']:,} token ≈ ¥{production['cny']}")
+    print(f"  省下（对照列是外推）: {saved['files']} 个文件送审 · {saved['tokens']:,} token ≈ ¥{saved['cny']}"
           f"（省 {saved['ratio']:.2%}）")
     print()
     print(f"消融（摘掉 ClamAV 的 1000 分，同一批 rows 重算）: 送审率 "
@@ -213,6 +329,8 @@ def main() -> int:
           f"{ablation['clamav_hit_files']}")
     if args.out:
         print(f"\n写入 {args.out}")
+    if args.sample_out and sample_payload:
+        print(f"写入 {args.sample_out}（含抽中的 {len(sample_payload['files'])} 个文件清单）")
     return 0
 
 
