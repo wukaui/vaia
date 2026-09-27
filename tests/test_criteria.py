@@ -533,3 +533,25 @@ def test_report_shows_a_failed_clamav_batch_instead_of_looking_clean():
     assert R._clamav_summary([ok])["files_with_a_batch_error"] == 0
     assert not any("没跑成" in s for s in R._unavailable_detections([ok]))
     assert R._clamav_summary([])["recorded"] is False
+
+
+def test_clamav_fingerprint_invalidates_the_cache_when_the_signature_db_changes(monkeypatch):
+    """AV 库/引擎变了 → 旧缓存条目整体失效（2026-09-27 实测踩过的坑）。
+
+    那一轮：ClamAV 批次超时写进缓存的结论，在机器安静下来、ClamAV 跑成之后
+    **被原样重放** —— 送审率 0.31% 变成 3.45%，报告里还看不出是缓存干的。
+    """
+    from aiav import cache, tools
+
+    monkeypatch.setattr(tools, "clamav_engine_info", lambda *a, **k: {
+        "available": True, "exe": "/usr/bin/clamscan", "db_version": "28135"})
+    old = cache.clamav_fingerprint()
+    monkeypatch.setattr(tools, "clamav_engine_info", lambda *a, **k: {
+        "available": True, "exe": "/usr/bin/clamscan", "db_version": "28136"})
+    assert cache.clamav_fingerprint() != old
+    monkeypatch.setattr(tools, "clamav_engine_info", lambda *a, **k: {"available": False})
+    assert cache.clamav_fingerprint() == "unavailable"
+
+    # 指纹要真的进缓存键（不是算出来没人用）
+    c = cache.ScanCache(root=__import__("pathlib").Path("/tmp/nonexistent-cache-fp"))
+    assert "clamav" in c.current_fingerprints()

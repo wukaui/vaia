@@ -1868,7 +1868,11 @@ def scan_file(
         disposition=({"status": "previously_quarantined", "id": prev.get("id")}
                      if prev and prev.get("status") == "quarantined" else {}),
     )
-    if scan_cache is not None and not error:
+    # 不缓存"AV 层没跑成"的结论（`AI_AV_DETERMINISTIC_CLOSE` 那一档同理）：
+    # 缓存键里已经有 AV 库指纹，但同一批里**个别文件**没结果行是批次级的事，
+    # 只在指纹里拦不住 —— 这类条目写进去，下一个健康批次会原样重放"没有 AV 证据"的判定。
+    # 与"规则模式的结果不许在有 AI 的 run 里命中"是同一条原则：**降级结果不进缓存**。
+    if scan_cache is not None and not error and not (evidence.clamav or {}).get("error"):
         scan_cache.put(sha256, final_report, deterministic=deterministic,
                        ai_enabled=agent is not None,
                        samples=(agent_samples if agent_samples is not None else _agent_samples()),
