@@ -234,7 +234,8 @@ def iter_files(
 
 
 def quick_prefilter(path: Path, sha256: str, with_signature: bool = False,
-                    clamav_batch: Mapping[str, Any] | None = None) -> PreliminaryEvidence:
+                    clamav_batch: Mapping[str, Any] | None = None,
+                    ai_threshold: int | None = None) -> PreliminaryEvidence:
     """规则预筛，不调用 LLM。
 
     with_signature=True 时附带确定性签名证据块（要调 Windows 验签，约 0.5s/文件），
@@ -242,6 +243,14 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False,
 
     `clamav_batch` 是 `tools.clamav_scan_batch()` 的返回值（**整批一次进程**的 ClamAV 结果）。
     传了就用它查表，不传才走单文件兜底 —— 单文件一次要重新加载 362 万条签名（6.3 s）。
+
+    `ai_threshold` = 本次跑的**运行时闸门**（`--ai-threshold`）。不传就退回默认的
+    `AI_GATE`。⚠️ 2026-09-27 阈值扫描扫出来的坑：这里原来写死 `AI_GATE`，于是
+    `--ai-threshold 100` 跑出来的报告里，逐文件 `deterministic.disposition` 还是按
+    300 算的 —— 105 个真送了 AI 的文件里有 104 个被标成 `pass`（"未结案"），
+    报告抬头也写着"闸门 300"，**产物自己看不出这一档到底送了多少审**。
+    路由本来就走 `scan_file` 里的 `prefilter_score >= ai_threshold`，这里只是让
+    **报告字段**跟路由说同一件事。
     """
     ext = path.suffix.lower()
     name_lower = path.name.lower()
@@ -523,7 +532,8 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False,
     # 分数由判据表算出来（每条夹自己的 max_score），不再由散落的字面量累加。
     # 判干净方向的结案判据命中时**归零**（上游 safelist 语义），所以分数与结论同源。
     score, scored, clean_ids = file_score(hits)
-    verdict_now = decide_deterministic(hits)
+    gate_used = AI_GATE if ai_threshold is None else int(ai_threshold)
+    verdict_now = decide_deterministic(hits, gate=gate_used)
 
     return PreliminaryEvidence(
         path=str(path),
@@ -553,7 +563,7 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False,
             "score": verdict_now.score,
             "sends_to_ai": verdict_now.sends_to_ai,
             "reasons": verdict_now.reasons,
-            "gate": AI_GATE,
+            "gate": gate_used,
         },
     )
 
@@ -1495,6 +1505,8 @@ def scan_file(
     evidence = quick_prefilter(
         path, sha256, with_signature=_signature_check_enabled(agent is not None),
         clamav_batch=clamav_batch,
+        # 闸门传给预筛：让报告里的处置/闸门字段跟下面的路由说同一件事
+        ai_threshold=ai_threshold,
     )
 
     # 分流·取证层阈值（2026-09-27）：≤0 = 不分流（全部文件都跑 capa/floss，旧行为）。

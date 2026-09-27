@@ -35,6 +35,16 @@ def _band(score: int) -> str:
 
 def build_summary(reports: list[FileReport]) -> dict[str, Any]:
     """报告聚合视图：风险 / 类型 / 处置 / 策略 / 采样 / 溯源 一屏看全。"""
+    # 抬头那个"闸门"必须是**这一轮真正用的**那个（`--ai-threshold`），不是常量。
+    # ⚠️ 2026-09-27 阈值扫描扫出来的坑：这里原来写死 `AI_GATE`(300)，于是
+    # `--ai-threshold 100` 跑出来的报告抬头写着"闸门 300"，而 `sent` 是 105 ——
+    # **产物自己看不出这一档用的什么配置**（扫阈值最不能忍的一条）。
+    # 逐文件的 `deterministic.gate` 现在是运行时闸门，这里取众数；老报告（缓存里的）
+    # 可能是满值 300，所以退化时才用常量兜底。
+    gates = Counter((r.deterministic or {}).get("gate") for r in reports
+                    if isinstance((r.deterministic or {}).get("gate"), int))
+    gate = gates.most_common(1)[0][0] if gates else AI_GATE
+
     risk = Counter(r.verdict.risk.value for r in reports)
     ext = Counter((r.extension or "(none)") for r in reports)
     category = Counter((r.verdict.category or "unknown") for r in reports)
@@ -133,7 +143,7 @@ def build_summary(reports: list[FileReport]) -> dict[str, Any]:
         "total": len(reports),
         "errors": sum(1 for r in reports if r.error),
         "deterministic": {
-            "gate": AI_GATE,
+            "gate": gate,
             "send_rate": round(sent / n, 4),
             "sent": sent,
             "closed_malicious": dispositions.get("closed_malicious", 0),
