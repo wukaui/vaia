@@ -1,11 +1,16 @@
-"""Assemblyline 的三档计分语义 —— 我们在它上面包了一层，用来决定"谁送 AI、谁不送"。
+"""Assemblyline 的三档计分语义 —— **数值由上游包算，我们只做档位与处置**。
 
-上游 `common/heuristics.py`（原文抄在 `_compat/heuristics.py`）只做一件事：
-把"一条判据 + 命中次数 + 每条签名自己的分数"算成一个整数分，并夹在 `max_score` 以内。
-**它自己不做判决** —— 分算出来给人看。我们的分工是：
+这个模块是"装包路线"的接口面：`pip install assemblyline` 装进来的那个包，
+我们只用它两样东西 —— **模型**（`odm/models/*`）和**计分语义**（`common/heuristics.py`）。
+这里不复制它的任何一行代码，只做一层薄适配：
 
-    确定性层（抄它的）：拦掉绝大部分，给出可解释证据，能结案就结案
-    AI 层（我们的）    ：只判"规则说不清"的中间带
+    我们的 HeuristicScore（判据定义） → 上游 odm.models.heuristic.Heuristic（模型）
+    我们的命中记录                    → 上游 common.heuristics.HeuristicHandler（算分：
+                                        累加 / 频次乘 / max_score 夹逼 / 签名白名单归零 / ATT&CK 展开）
+
+**不碰它的平台**（MongoDB / Elasticsearch / Redis / K8s）：全程 `HeuristicHandler(datastore=None)`，
+不需要任何服务在跑。上游那份 `forge.get_datastore()` 我们一次都不调 ——
+`tests/test_assemblyline_core.py` 把 socket 拦掉跑，调了当场炸。
 
 三档语义（上游文档，`<500` / `500-1000` / `≥1000`）：
 
@@ -15,11 +20,10 @@
     ≥ 1000     高置信，单条即可定恶意，几乎无误报。
                上游明说这类分数来自**签名类服务**（AV / VT / YARA 命中已知家族）。
 
-分数映射（给人看的档位，与上面三档是两套刻度，别混）：
+档位边界**从上游 `odm/models/config.py::DEFAULT_VERDICTS` 读**（0 / 300 / 700 / 1000），
+不再是我们自己写的字面量 —— 上游改默认值我们跟着改，不用动代码。
 
-    -1000 安全 | 0-299 参考 | 300-699 可疑 | 700-999 高度可疑 | ≥1000 恶意
-
-计分规则（照抄上游）：
+计分规则（上游 `common/heuristics.py::Heuristic.__init__` 的原文实现，不是我们重写的）：
 
     同一段内各信号分数**累加**；
     同一签名命中 N 次，该签名分数 **× N**；
@@ -35,6 +39,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Iterable, Mapping, Sequence
 
+from assemblyline.common.heuristics import HeuristicHandler, get_safelist_key
+from assemblyline.odm.models.config import DEFAULT_VERDICTS
+from assemblyline.odm.models.heuristic import Heuristic as UpstreamHeuristicModel
+
 
 # --------------------------------------------------------------------------------------
 # 档位
@@ -49,18 +57,25 @@ class ScoreBand(str, Enum):
     MALICIOUS = "malicious"             # >= 1000
 
 
-#: 档位边界（左闭右开），照上游文档。负数分只在"白名单命中扣分"的场景出现，这里不产生负数。
+#: 上游把 `< info` 一律当"安全"，没有负数档。我们留一个负数档位，
+#: 给"白名单命中扣分"这类场景留位置（当前不产生负数）。
+SAFE_FLOOR = -1000
+
+#: 档位边界（左闭右开）—— 除 SAFE_FLOOR 外全部来自上游 `DEFAULT_VERDICTS`。
 SCORE_BANDS: tuple[tuple[int, ScoreBand], ...] = (
-    (-1000, ScoreBand.SAFE),
-    (0, ScoreBand.REFERENCE),
-    (300, ScoreBand.SUSPICIOUS),
-    (700, ScoreBand.HIGHLY_SUSPICIOUS),
-    (1000, ScoreBand.MALICIOUS),
+    (SAFE_FLOOR, ScoreBand.SAFE),
+    (DEFAULT_VERDICTS["info"], ScoreBand.REFERENCE),
+    (DEFAULT_VERDICTS["suspicious"], ScoreBand.SUSPICIOUS),
+    (DEFAULT_VERDICTS["highly_suspicious"], ScoreBand.HIGHLY_SUSPICIOUS),
+    (DEFAULT_VERDICTS["malicious"], ScoreBand.MALICIOUS),
 )
 
 #: 三档**处置**语义 —— 这才是"送审率"的闸门。
-WEAK_MAX = 500
-STRONG_MAX = 1000
+#: 300 = 上游 `verdicts.suspicious`（"算可疑"的那条线），1000 = `verdicts.malicious`（结案线）。
+SUSPICIOUS_SCORE = DEFAULT_VERDICTS["suspicious"]
+MALICIOUS_SCORE = DEFAULT_VERDICTS["malicious"]
+WEAK_MAX = 500              # 我们的：可疑档（300）与结案档（1000）之间的分界
+STRONG_MAX = MALICIOUS_SCORE
 
 
 class ScoreTier(str, Enum):
@@ -122,60 +137,85 @@ class ScoredHeuristic:
     zeroed_by_safelist: bool = False
 
 
+def _as_upstream_model(definition: HeuristicScore) -> UpstreamHeuristicModel:
+    """我们的判据定义 → 上游 `Heuristic` 模型。分数与上限原样搬过去，一个都不改。
+
+    上游模型对 `description` / `filetype` 不接受空串（空串 = 校验失败），
+    我们这边允许留空，所以补个兜底值 —— 补的是"名字"，不是编一个描述出来。
+    """
+    return UpstreamHeuristicModel({
+        "heur_id": definition.heur_id,
+        "name": definition.name or definition.heur_id,
+        "description": definition.description or definition.name or definition.heur_id,
+        "filetype": definition.filetype or "*",
+        "score": int(definition.score),
+        "signature_score_map": {k: int(v) for k, v in dict(definition.signature_score_map).items()},
+        "max_score": None if definition.max_score is None else int(definition.max_score),
+    })
+
+
+def _handler(signature_safe: Mapping[str, bool]) -> HeuristicHandler:
+    """构造上游 `HeuristicHandler`，**不接 datastore**（接了就代表要连平台）。
+
+    上游在白名单上只用一件事：`safelist.get("signature__<名字>")` 存不存在。
+    它没有 datastore 时 `self.safelist` 是个空 dict，我们按它的键格式塞进去即可 ——
+    "全段签名 safe 则归零"这条规则仍然由上游的代码执行。
+    """
+    handler = HeuristicHandler()
+    handler.safelist = {
+        get_safelist_key("signature", name): True
+        for name, is_safe in signature_safe.items() if is_safe
+    }
+    return handler
+
+
 def score_heuristic(
     definition: HeuristicScore,
     *,
     frequency: int = 1,
     signatures: Mapping[str, int] | None = None,
     signature_safe: Mapping[str, bool] | None = None,
-    attack_lookup=None,
 ) -> ScoredHeuristic:
-    """算一条判据的分数。语义逐条对齐上游 `common/heuristics.py::Heuristic.__init__`：
+    """算一条判据的分数。**算式在上游，这里只搬进搬出。**
 
-    1. 有签名命中 → 分 = Σ 每条签名分数 × 该签名命中次数；
-       签名分数取值优先级：`signature_score_map[name]` > 本次 `score_map[name]` > 判据默认分。
-    2. 没有签名 → 分 = 判据默认分 × 频次（频次缺省 1）。
-    3. 夹到 `max_score`。
-    4. 若所有签名都 safe → 分归零（上游 `HeuristicHandler.service_heuristic_to_result_heuristic`）。
+    上游 `HeuristicHandler.service_heuristic_to_result_heuristic()` 干完了全部四件事：
+    分数累加 / 频次乘 / `max_score` 夹逼 / 全段 safe 归零，外加 ATT&CK 展开
+    （含 `software_map` / `group_map` 的关联展开 —— 以前我们自己抄的那份只认 technique）。
+
+    ⚠️ 上游的 `signatures` 参数是 `{签名名: 命中次数}`，不是 `{签名名: 分数}`。
+    弄反过一次：把分数当次数传进去，125 × 125 直接被 max_score 夹到上限，
+    于是"命中一次"和"命中三次"给出同一个数。分数从判据定义里取，次数从命中记录里取。
+
+    ⚠️ 上游对签名频次是 `sig_score * freq`，`freq=0` 会算出 0 分。我们把频次夹到 ≥1 ——
+    命中记录里"命中 0 次"是不存在的输入，不是"这条不算分"的表达方式。
     """
-    sigs = dict(signatures or {})
-    safe_map = dict(signature_safe or {})
+    sigs = {str(name): max(int(freq), 1) for name, freq in dict(signatures or {}).items()}
+    safe_map = {str(name): bool(ok) for name, ok in dict(signature_safe or {}).items()}
+    freq = max(int(frequency or 1), 1)
 
-    if sigs:
-        total = 0
-        for sig_name, freq in sigs.items():
-            sig_score = definition.signature_score_map.get(sig_name, definition.score)
-            total += sig_score * (freq or 1)
-        score = total
-    else:
-        score = definition.score * (frequency or 1)
+    service_heuristic = {
+        "heur_id": definition.heur_id,
+        "attack_ids": list(definition.attack_ids),
+        "signatures": sigs,
+        "frequency": freq,
+        "score_map": {},
+    }
+    output, _tags = _handler(safe_map).service_heuristic_to_result_heuristic(
+        service_heuristic, {definition.heur_id: _as_upstream_model(definition)}
+    )
 
-    if definition.max_score is not None:
-        score = min(score, definition.max_score)
-
-    zeroed = False
-    if sigs and all(safe_map.get(name, False) for name in sigs):
-        score = 0
-        zeroed = True
-
-    attack = []
-    if attack_lookup is not None:
-        for aid in definition.attack_ids:
-            item = attack_lookup(aid)
-            if item:
-                attack.append({"attack_id": aid, **item})
-            else:
-                attack.append({"attack_id": aid})
-
+    score = int(output["score"])
     return ScoredHeuristic(
-        heur_id=definition.heur_id,
-        name=definition.name,
+        heur_id=output["heur_id"],
+        name=output["name"],
         score=score,
-        frequency=frequency or 1,
+        frequency=freq,
         signatures=sigs,
-        attack=attack,
+        attack=list(output["attack"]),
         signature_safe=safe_map,
-        zeroed_by_safelist=zeroed,
+        # 上游是"算完发现全 safe 就把分改成 0"，不额外告诉你是被归零的。
+        # 这个标记只给报告解释用，不改上游算出来的分。
+        zeroed_by_safelist=bool(sigs) and score == 0 and all(safe_map.get(n, False) for n in sigs),
     )
 
 

@@ -315,7 +315,7 @@ def write_reports(reports: list[FileReport], output_dir: Path,
         },
         "aggregate": summary,
         # Assemblyline 形状的证据链（2026-09-27）：判据 / 依据 / 证据段 / 服务 / 血缘。
-        # 结构由**抄来的上游 `Result` 模型**校验过，校验不过会在这里抛出来（不静默）。
+        # 结构由**装进 venv 的上游 `Result` 模型**校验过，校验不过会在这里抛出来（不静默）。
         "assemblyline": _assemblyline_payload(reports),
         # 逐文件溯源统计：报告正文里每条结论能不能对回工具输出，这里给出可核对的计数
         "attribution_by_file": {

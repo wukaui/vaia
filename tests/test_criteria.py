@@ -2,7 +2,7 @@
 
 盯三件事：
 1. **三档归位是对的** —— 弱信号必须复合、强信号能单独送审、确定性判据能结案。
-2. **max_score / 频次 / 白名单归零** 这些上游语义照抄没走样。
+2. **max_score / 频次 / 白名单归零** 这些上游语义没走样（算式在上游包里，我们只搬进搬出）。
 3. **产出方不许有"幽灵分"** —— 任何一处 `reasons.append(...)` 里的信号，
    判据表都得认得出是哪条判据。认不出就是"加了分但报告里没有判据"，
    这条测试直接失败（核验铁律：静默降级计数必须为 0）。
@@ -301,3 +301,153 @@ def test_any_clean_conclusive_criterion_closes_clean():
             verdict = C.decide([C.CriterionHit(crit.heur_id, crit.name)])
             assert verdict.disposition is C.Disposition.CLOSED_CLEAN, crit.heur_id
             assert verdict.score == 0, crit.heur_id
+
+
+# --------------------------------------------------------------------------------------
+# 6. ClamAV 批量调用 + 签名名三档（2026-09-27）
+# --------------------------------------------------------------------------------------
+class _FakeProc:
+    """只带 `.stdout` / `.stderr` 的假 subprocess 返回值（tools 里只读这两个字段）。"""
+
+    def __init__(self, stdout: bytes):
+        self.stdout = stdout
+        self.stderr = b""
+
+
+def _fake_clamscan(tmp_path, monkeypatch, stdout: bytes):
+    """注入一个假的 clamscan：`_find_exe` 找得到（`CLAMAV_EXE` 指过去），输出由调用方给。"""
+    from aiav import tools
+
+    fake = tmp_path / "clamscan"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("CLAMAV_EXE", str(fake))
+
+    def runner(_cmd):
+        return _FakeProc(stdout)
+
+    return tools, runner
+
+
+def test_clamav_batch_parses_found_and_ok_and_classifies(tmp_path, monkeypatch):
+    """一次进程扫一批：`FOUND` / `OK` 两种行都要认，签名名分三档。"""
+    files = [tmp_path / n for n in ("a.exe", "b.exe", "c.exe", "d.exe")]
+    out = (f"{files[0]}: Win.Trojan.Agent-123 FOUND\n"
+           f"{files[1]}: OK\n"
+           f"{files[2]}: Heur.AdvML.B FOUND\n"
+           f"{files[3]}: PUA.Adware.InstallCore FOUND\n").encode()
+    tools, runner = _fake_clamscan(tmp_path, monkeypatch, out)
+
+    batch = tools.clamav_scan_batch(files, runner=runner)
+    assert batch["available"] and batch["scanned"] == 4 and batch["found"] == 3
+    assert batch["kinds"] == {"malware": 1, "heuristic": 1, "pua": 1}
+    assert batch["unreported"] == []
+    assert batch["invocations"] == 1                       # **批量的证据**：4 个文件 1 次进程
+    assert batch["results"][str(files[1])]["infected"] is False
+    assert batch["results"][str(files[2])]["kind"] == "heuristic"
+
+
+def test_clamav_batch_counts_files_without_a_result_line(tmp_path, monkeypatch):
+    """传进去却没出现在输出里 = **静默跳过**，必须单独计数（不许读成"扫过且干净"）。"""
+    files = [tmp_path / n for n in ("a.exe", "b.exe")]
+    out = f"{files[0]}: OK\n".encode()
+    tools, runner = _fake_clamscan(tmp_path, monkeypatch, out)
+
+    batch = tools.clamav_scan_batch(files, runner=runner)
+    assert batch["scanned"] == 1
+    assert batch["unreported"] == [str(files[1])]
+
+
+def test_clamav_heuristic_hit_is_suspicious_not_conclusive():
+    """启发式命中**不算 1000 分**：送 AI 复核，永远不结案。"""
+    hit = C.CriterionHit("DET_CLAMAV_HEUR", "ClamAV 启发式命中: Heur.AdvML.B",
+                         signatures=("Heur.AdvML.B",))
+    verdict = C.decide([hit])
+    assert verdict.score == C.SUSPICIOUS_SCORE == 300
+    assert verdict.tier is not C.ScoreTier.CONCLUSIVE
+    assert verdict.disposition is C.Disposition.SEND_AI
+
+
+def test_clamav_heuristic_hits_never_reach_the_conclusive_band():
+    """启发式命中再多也不结案 —— `decide()` 只认判据上的 `conclusive`，不认分数。
+
+    （单条判据自己的分数被 `max_score` 夹在 500；但文件分是各判据段**求和**，
+    所以条数堆上去总分能过 1000 —— 靠的正是"没有结案判据就不许结案"这条加严规则。）
+    """
+    one = C.score_hits([C.CriterionHit("DET_CLAMAV_HEUR", "ClamAV 启发式命中: Heur.X0",
+                                       frequency=99, signatures=("Heur.X0",))])[0]
+    assert one.score == C.STRONG_FLOOR == 500        # 单段被 max_score 夹住
+
+    hits = [C.CriterionHit("DET_CLAMAV_HEUR", f"ClamAV 启发式命中: Heur.X{i}", signatures=(f"Heur.X{i}",))
+            for i in range(5)]
+    verdict = C.decide(hits)
+    assert verdict.score > C.CONCLUSIVE_SCORE        # 总分确实过了 1000
+    assert verdict.tier is C.ScoreTier.STRONG        # 但不许结案
+    assert verdict.disposition is C.Disposition.SEND_AI
+
+
+def test_clamav_pua_hit_scores_zero_but_keeps_the_signature_name():
+    """PUA/adware 归零（上游 `kw_score_revision_map` 的 `adware: 0`）—— 留痕，不定级。"""
+    hit = C.CriterionHit("DET_CLAMAV_PUA", "ClamAV PUA 命中: PUA.Adware.InstallCore",
+                         signatures=("PUA.Adware.InstallCore",))
+    scored = C.score_hits([hit])[0]
+    assert scored.score == 0
+    assert scored.signatures == {"PUA.Adware.InstallCore": 1}   # 签名名还在证据链里
+    verdict = C.decide([hit])
+    assert verdict.disposition is C.Disposition.PASS
+    assert verdict.score == 0
+
+
+def test_clamav_kinds_map_to_three_separate_criteria():
+    """三档必须是三条判据 ID —— `decide()` 认的是判据上的 `conclusive`，不是分数。"""
+    from aiav.scanner import _CLAMAV_KIND_CRITERIA
+
+    ids = [heur_id for heur_id, _ in _CLAMAV_KIND_CRITERIA.values()]
+    assert len(set(ids)) == 3
+    conclusive = [C.CRITERIA[i].conclusive for i in ids]
+    assert conclusive == [True, False, False]
+
+
+def test_scanner_uses_the_batch_index(tmp_path):
+    """①层真的会去查批量索引：命中 → 确定性结案，签名名原样进证据链。"""
+    from aiav import scanner
+
+    p = tmp_path / "x.exe"
+    p.write_bytes(b"MZ" + b"\x00" * 64)
+    batch = {"available": True, "results": {str(p): {
+        "infected": True, "signature": "Win.Trojan.Zbot-9757924-0", "kind": "malware"}}}
+
+    ev = scanner.quick_prefilter(p, scanner.compute_sha256(p), clamav_batch=batch)
+    assert ev.deterministic["disposition"] == "closed_malicious"
+    hit = next(h for h in ev.criteria_hits if h["heur_id"] == "DET_CLAMAV_SIGNATURE")
+    assert hit["signature"] == [{"name": "Win.Trojan.Zbot-9757924-0", "frequency": 1, "safe": False}]
+    assert ev.clamav == {"available": True, "infected": True,
+                         "signature": "Win.Trojan.Zbot-9757924-0",
+                         "kind": "malware", "batch": True, "error": ""}
+
+
+def test_scanner_marks_a_file_missing_from_the_batch_as_not_scanned(tmp_path):
+    """批次里没有这个文件 ≠ 扫过且干净 —— 必须显式记成"静默跳过"。"""
+    from aiav import scanner
+
+    p = tmp_path / "y.exe"
+    p.write_bytes(b"MZ" + b"\x00" * 64)
+    ev = scanner.quick_prefilter(p, scanner.compute_sha256(p),
+                                 clamav_batch={"available": True, "results": {}})
+    assert ev.clamav["available"] is True
+    assert ev.clamav["infected"] is False
+    assert "静默跳过" in ev.clamav["error"]
+    assert ev.deterministic["disposition"] != "closed_malicious"
+
+
+def test_scanner_scans_every_extension_in_batch_mode(tmp_path):
+    """批量路径不按扩展名过滤：`.ole` 不在旧白名单里，但 ClamAV 对它是能出命中的。"""
+    from aiav import scanner
+
+    p = tmp_path / "sample.ole"
+    p.write_bytes(b"\xd0\xcf\x11\xe0" + b"\x00" * 64)
+    batch = {"available": True, "results": {str(p): {
+        "infected": True, "signature": "Doc.Dropper.Emotet-9761056-0", "kind": "malware"}}}
+
+    ev = scanner.quick_prefilter(p, scanner.compute_sha256(p), clamav_batch=batch)
+    assert ev.deterministic["disposition"] == "closed_malicious"

@@ -6,7 +6,7 @@ import re
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Callable, Iterator, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from pydantic_ai import Agent
 
@@ -55,6 +55,7 @@ from aiav.tools import (
     pe_packing_signals,
     run_yara,
     clamav_evidence,
+    classify_clamav_signature,
     signature_evidence,
     unavailable_detections,
 )
@@ -65,6 +66,22 @@ EICAR = rb"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 # 放宽到 256 是给带换行/尾注的变体留余量，同时把"源码里定义了这个常量"的文件排除掉。
 # 设成 0 可以退回旧的子串匹配行为（不推荐，见 quick_prefilter 里的说明）。
 EICAR_MAX_BYTES = 256
+
+#: ClamAV 签名名 → 判据 ID / 理由前缀。三档分开成三条判据，因为 `decide()` 认的是
+#: 判据 ID 上的 `conclusive` 标记而不是分数 —— 共用一个 ID 会把启发式命中一起结案。
+_CLAMAV_KIND_CRITERIA: dict[str, tuple[str, str]] = {
+    "malware": ("DET_CLAMAV_SIGNATURE", "ClamAV 命中"),
+    "heuristic": ("DET_CLAMAV_HEUR", "ClamAV 启发式命中"),
+    "pua": ("DET_CLAMAV_PUA", "ClamAV PUA 命中"),
+}
+
+#: **单文件兜底路径**的扩展名白名单（批量路径不看这个，见 quick_prefilter 里的说明）。
+#: 这是"每次起进程 6.3 秒"时代留下的省时间手段：批量之后每文件零点几秒，过滤只会漏样本。
+_CLAMAV_SINGLE_FILE_EXTS = {
+    ".exe", ".dll", ".sys", ".scr", ".cpl", ".ocx", ".com", ".pif", ".pyd", ".efi",
+    ".doc", ".docm", ".xls", ".xlsm", ".pdf", ".js", ".vbs", ".ps1", ".lnk", ".rtf",
+    ".jar", ".zip", ".rar", ".7z",
+}
 
 
 def _file_size(path: Path) -> int:
@@ -216,11 +233,15 @@ def iter_files(
             yield path
 
 
-def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> PreliminaryEvidence:
+def quick_prefilter(path: Path, sha256: str, with_signature: bool = False,
+                    clamav_batch: Mapping[str, Any] | None = None) -> PreliminaryEvidence:
     """规则预筛，不调用 LLM。
 
     with_signature=True 时附带确定性签名证据块（要调 Windows 验签，约 0.5s/文件），
     只在会进 AI 的路径上用；纯规则全量扫描默认关掉以免变慢。
+
+    `clamav_batch` 是 `tools.clamav_scan_batch()` 的返回值（**整批一次进程**的 ClamAV 结果）。
+    传了就用它查表，不传才走单文件兜底 —— 单文件一次要重新加载 362 万条签名（6.3 s）。
     """
     ext = path.suffix.lower()
     name_lower = path.name.lower()
@@ -446,18 +467,47 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
 
     # ---- ClamAV（≥1000 档，确定性结案判恶意）----
     # 装了才跑；没装就**显式记成"未产出"**，不记成"扫过且干净"。
-    clamav = {"available": False, "infected": False, "signature": "", "error": ""}
-    if ext in {".exe", ".dll", ".sys", ".scr", ".cpl", ".ocx", ".com", ".pif", ".pyd", ".efi",
-               ".doc", ".docm", ".xls", ".xlsm", ".pdf", ".js", ".vbs", ".ps1", ".lnk", ".rtf",
-               ".jar", ".zip", ".rar", ".7z"} or ext == "":
+    #
+    # 2026-09-27 改成**批量优先**：批次由调用方（`aiav scan` / 实测脚本）用
+    # `tools.clamav_scan_batch(files)` 一次性建好，这里只查表 —— 一个文件起一次 clamscan
+    # 每次都要重新加载 362 万条签名（6.3 s/文件），批量摊到每文件 0.1~0.4 s。
+    # 没有批次（单文件调用）才走 `clamav_evidence()` 兜底，并在报告里标 `batch=False`。
+    #
+    # 批次里**不按扩展名过滤**：那个过滤是"每次进程 6.3 秒"时代留下的省时间手段，
+    # 批量之后每文件只有零点几秒，而过滤会实打实地漏样本（Dike 的 `.ole` 就不在旧白名单里，
+    # ClamAV 对它们是能出 `Doc.Dropper.Emotet` 这种命中的）。过滤只保留在单文件兜底路径上。
+    clamav: dict[str, Any] = {"available": False, "infected": False, "signature": "",
+                              "kind": "", "batch": False, "error": ""}
+    if clamav_batch is not None:
+        if not clamav_batch.get("available"):
+            clamav["error"] = (clamav_batch.get("error")
+                               or "ClamAV 未安装（clamscan / clamdscan 都不在 PATH 里）")
+        else:
+            batch_hit = (clamav_batch.get("results") or {}).get(str(path))
+            if batch_hit is None:
+                # 传进去了却没出现在输出里 = **静默跳过**。不是"扫过且干净"。
+                clamav = {**clamav, "available": True, "batch": True,
+                          "error": "本批 ClamAV 没有这个文件的结果（静默跳过，不是扫过且干净）"}
+            else:
+                clamav = {"available": True, "batch": True,
+                          "infected": bool(batch_hit.get("infected")),
+                          "signature": batch_hit.get("signature") or "",
+                          "kind": batch_hit.get("kind") or "", "error": ""}
+    elif ext in _CLAMAV_SINGLE_FILE_EXTS or ext == "":
         try:
             clamav = clamav_evidence(path)
         except Exception as exc:  # noqa: BLE001 - AV 跑不动不影响其它信号
             clamav = {"available": False, "infected": False, "signature": "",
-                      "error": f"{type(exc).__name__}: {exc}"}
-        if clamav.get("infected"):
-            _hit("DET_CLAMAV_SIGNATURE", f"ClamAV 命中: {clamav.get('signature') or '(未取到签名名)'}",
-                 signatures=(clamav.get("signature") or "clamav",))
+                      "kind": "", "batch": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    if clamav.get("infected"):
+        sig = clamav.get("signature") or ""
+        # 签名名分三档：真病毒 → 1000 结案；启发式 → 300 送审；PUA/adware → 0 只留痕。
+        # 签名名**原样**进判据的 `signature.name`（报告的证据链，也是复核时要看的东西）。
+        heur_id, label = _CLAMAV_KIND_CRITERIA.get(
+            clamav.get("kind") or classify_clamav_signature(sig),
+            _CLAMAV_KIND_CRITERIA["malware"])
+        _hit(heur_id, f"{label}: {sig or '(未取到签名名)'}", signatures=(sig or "clamav",))
 
     # ---- 确定性结案判据（2026-09-27）----
     # 这两条不进"弱信号累加"，它们各自就是结论：
@@ -492,6 +542,8 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
         clamav={"available": bool(clamav.get("available")),
                 "infected": bool(clamav.get("infected")),
                 "signature": clamav.get("signature") or "",
+                "kind": clamav.get("kind") or "",
+                "batch": bool(clamav.get("batch")),
                 "error": clamav.get("error") or ""},
         deterministic={
             "disposition": verdict_now.disposition.value,
@@ -1338,6 +1390,7 @@ def scan_file(
     budget: TokenBudget | None = None,
     deterministic: bool = True,
     deep_evidence_threshold: int | None = None,
+    clamav_batch: Mapping[str, Any] | None = None,
 ) -> FileReport:
     """扫描单个文件。
 
@@ -1348,6 +1401,9 @@ def scan_file(
 
     `deep_evidence_threshold` 是**分流·取证层**（2026-09-27）：预筛分数 < 它的文件
     只采轻量证据，不跑 capa/floss。`None` 时读环境变量（默认 0 = 不分流，全部深挖）。
+
+    `clamav_batch` 是 `tools.clamav_scan_batch(files)` 的返回值：**整批只起一次 clamscan**
+    的 ClamAV 结果，①层查表用。不传 = 单文件兜底（每次重新加载库，6.3 s/文件）。
     """
     try:
         sha256 = compute_sha256(path)
@@ -1437,7 +1493,8 @@ def scan_file(
 
     # 是否走 AI：决定要不要先采集确定性签名证据块
     evidence = quick_prefilter(
-        path, sha256, with_signature=_signature_check_enabled(agent is not None)
+        path, sha256, with_signature=_signature_check_enabled(agent is not None),
+        clamav_batch=clamav_batch,
     )
 
     # 分流·取证层阈值（2026-09-27）：≤0 = 不分流（全部文件都跑 capa/floss，旧行为）。
@@ -1828,8 +1885,12 @@ def scan_files_concurrent(
     store: "StateStore | None" = None,
     deterministic: bool = True,
     deep_evidence_threshold: int | None = None,
+    clamav_batch: Mapping[str, Any] | None = None,
 ) -> list[FileReport]:
-    """并发扫描多个文件；每个线程使用独立 Agent，避免共享模型客户端。"""
+    """并发扫描多个文件；每个线程使用独立 Agent，避免共享模型客户端。
+
+    `clamav_batch` 见 `scan_file` —— 批次是只读的，多线程共享同一个 dict 没问题。
+    """
     if not files:
         return []
 
@@ -1837,7 +1898,8 @@ def scan_files_concurrent(
         agent = agent_factory() if agent_factory else None
         return [scan_file(p, agent, ai_threshold, agent_samples=agent_samples, budget=budget,
                           store=store, deterministic=deterministic,
-                          deep_evidence_threshold=deep_evidence_threshold)
+                          deep_evidence_threshold=deep_evidence_threshold,
+                          clamav_batch=clamav_batch)
                 for p in files]
 
     local = threading.local()
@@ -1851,7 +1913,8 @@ def scan_files_concurrent(
         return scan_file(path, getattr(local, "agent", None), ai_threshold,
                          agent_samples=agent_samples, budget=budget, store=store,
                          deterministic=deterministic,
-                         deep_evidence_threshold=deep_evidence_threshold)
+                         deep_evidence_threshold=deep_evidence_threshold,
+                         clamav_batch=clamav_batch)
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
         return list(executor.map(work, files))

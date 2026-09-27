@@ -47,6 +47,7 @@ Web UI：
         → 策略层：记录分歧与提示（不改判）→ 处置（隔离 / 白名单 / 历史，默认 dry-run）
         → JSON + HTML 报告（每条结论挂判据 ID + 证据来源 + 用了几次工具调用）
           · 报告结构照 Assemblyline `Result` 摆证据链，产物**过它模型的 schema 校验**
+            （模型来自装进 venv 的 `assemblyline` 包，不是我们抄的一份副本）
 ```
 
 ### ①层三档（判据表在 `aiav/criteria.py`）
@@ -70,8 +71,8 @@ Web UI：
 |---|---|
 | `aiav/cli.py` | CLI 入口（`aiav` 命令） |
 | `aiav/criteria.py` | **①层判据表**：每条判据的名字 / 分数 / max_score 上限 / 适用类型 / 产出工具 / ATT&CK + 三档处置 |
-| `aiav/assemblyline_core/` | 抄来的 Assemblyline ODM 核心（MIT，见该目录 README） |
-| `aiav/assemblyline_view.py` | 报告结构照 Assemblyline `Result` 摆证据链（判据 / 依据 / 证据段 / 服务 / 血缘），产物过它的 schema |
+| `aiav/assemblyline_core/` | **Assemblyline 适配层**（装包路线，MIT）：模型直接用上游包，算分委托上游 `common/heuristics.py`，档位边界从上游 `DEFAULT_VERDICTS` 读。**不依赖它的平台**（MongoDB / ES / Redis / K8s），见该目录 README |
+| `aiav/assemblyline_view.py` | 报告结构照 Assemblyline `Result` 摆证据链（判据 / 依据 / 证据段 / 服务 / 血缘），产物过**上游包那个** `Result` 的 schema |
 | `aiav/scanner.py` | 扫描编排：预筛 → 证据 → AI 判决 → 策略 → 处置 |
 | `aiav/tools.py` | AI 可调用的工具集 + YARA / 哈希等确定性证据 |
 | `aiav/preload.py` | 确定性证据前置：送审前本地按文件类型采齐工具输出（0 token），渲染进送审上下文；含分流·取证层（capa/floss 按分数跳过） |

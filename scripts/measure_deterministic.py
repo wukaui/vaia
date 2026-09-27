@@ -85,8 +85,13 @@ def label_of(path: Path, rule: str | None, labels: dict[str, str] | None = None)
 
 def run_corpus(name: str, files: list[Path], rule: str | None, gate: int,
                labels: dict[str, str] | None = None) -> dict:
-    from aiav import scanner
+    from aiav import scanner, tools
     from aiav.models import RiskLevel
+
+    # ---- ①层 ClamAV 批量预扫（2026-09-27）----
+    # **一次进程扫整批**：单文件一次要重新加载 362 万条签名（6.3 s），批量摊到 0.1~0.4 s/文件。
+    # 单独计时 —— 报告里"①层多花了多少时间"就是这一块。
+    clamav_batch = tools.clamav_scan_batch(files)
 
     rows = []
     t0 = time.time()
@@ -95,6 +100,7 @@ def run_corpus(name: str, files: list[Path], rule: str | None, gate: int,
             report = scanner.scan_file(
                 path, agent=None, ai_threshold=gate, store=None,
                 allow_unpack=False, allow_archives=False, cache=None,
+                clamav_batch=clamav_batch,
             )
         except Exception as exc:  # noqa: BLE001
             rows.append({"path": str(path), "label": label_of(path, rule, labels),
@@ -113,12 +119,25 @@ def run_corpus(name: str, files: list[Path], rule: str | None, gate: int,
             "risk": report.verdict.risk.value,
             "is_malicious_risk": report.verdict.risk is RiskLevel.malicious,
             "criteria": [h["heur_id"] for h in (report.criteria_hits or []) if h.get("score")],
+            # ClamAV 命中逐条留档：判据 ID + **签名名原样**（证据链）。零分的 PUA 也留，
+            # 否则"PUA 命中了几条"会凭空消失（`criteria` 那一列只收有分的）。
+            "clamav": [{"heur_id": h["heur_id"], "score": h.get("score"),
+                        "signatures": [s["name"] for s in (h.get("signature") or [])]}
+                       for h in (report.criteria_hits or [])
+                       if str(h.get("heur_id", "")).startswith("DET_CLAMAV_")],
             "unclassified": report.unclassified_signals or [],
             "error": report.error,
             })
     elapsed = time.time() - t0
-    return {"corpus": name, "gate": gate, "count": len(files), "elapsed_s": round(elapsed, 1),
-            "rows": rows, "summary": summarize(rows)}
+    result = {"corpus": name, "gate": gate, "count": len(files), "elapsed_s": round(elapsed, 1),
+              "rows": rows, "summary": summarize(rows)}
+    result["clamav_batch"] = {
+        k: v for k, v in clamav_batch.items() if k != "results"
+    }
+    result["clamav_batch"]["per_file_s"] = (
+        round(clamav_batch["elapsed_s"] / len(files), 3) if files else None)
+    result["elapsed_s_with_clamav"] = round(elapsed + clamav_batch["elapsed_s"], 1)
+    return result
 
 
 def summarize(rows: list[dict]) -> dict:
@@ -145,6 +164,11 @@ def summarize(rows: list[dict]) -> dict:
     unclassified = sum(len(r.get("unclassified") or []) for r in rows)
     errors = sum(1 for r in rows if r.get("error"))
 
+    # ClamAV 命中：逐条按判据 ID 分类 —— 真病毒 / 启发式 / PUA 各多少。
+    av_hits = [c for r in rows for c in (r.get("clamav") or [])]
+    av_kinds = Counter(c["heur_id"] for c in av_hits)
+    av_sigs = Counter(s for c in av_hits for s in (c.get("signatures") or []))
+
     return {
         "total": len(rows),
         "send_rate": round(sent / n, 4),
@@ -161,6 +185,15 @@ def summarize(rows: list[dict]) -> dict:
         "recall_layer1": round(mal_caught / len(mal), 4) if mal else None,
         "recall_deterministic_only": round(closed_mal / len(mal), 4) if mal else None,
         "benign_send_rate": round(ben_sent / len(ben), 4) if ben else None,
+        # ①层确定性判恶意里的 ClamAV 贡献（这是本轮的关键数：之前是 0）
+        "clamav": {
+            "hit_files": sum(1 for r in rows if r.get("clamav")),
+            "hits": len(av_hits),
+            "malware_signature": av_kinds.get("DET_CLAMAV_SIGNATURE", 0),
+            "heuristic": av_kinds.get("DET_CLAMAV_HEUR", 0),
+            "pua": av_kinds.get("DET_CLAMAV_PUA", 0),
+            "signatures_top": dict(av_sigs.most_common(20)),
+        },
         # 核验铁律
         "unclassified_signals": unclassified,
         "errors": errors,
@@ -194,6 +227,20 @@ def main() -> int:
     args.out.mkdir(parents=True, exist_ok=True)
     corpora = [parse_corpus(s) for s in args.corpus]
 
+    # ---- 核验铁律第一步：先验"工具真跑了吗" ----
+    # ClamAV 是这一批的**唯一新增产出方**，所以它单独验三样：
+    #   · `which clamscan` 找到了（装了）
+    #   · `clamscan --version` 报出了非零的**库版本**（库真加载了）
+    #   · EICAR 自检拿到 FOUND（引擎端到端真在工作 —— 装了但库空，长得跟"扫过且干净"一模一样）
+    from aiav import tools as _tools
+
+    engine = _tools.clamav_engine_info()
+    selftest = _tools.clamav_selftest()
+    print("ClamAV 核验：", json.dumps({"engine": {k: engine.get(k) for k in
+                                              ("available", "version", "db_version", "db_date")},
+                                       "db_files": engine.get("db_files"),
+                                       "selftest": selftest}, ensure_ascii=False), flush=True)
+
     all_runs = []
     for run_index in range(args.runs):
         run = {}
@@ -207,10 +254,18 @@ def main() -> int:
             result = run_corpus(name, files, rule, args.gate, labels)
             run[name] = result
             s = result["summary"]
+            cb = result["clamav_batch"]
             print(f"    送审率 {s['send_rate']:.3f} · 结案率 {s['closed_rate']:.3f} · "
                   f"未结案 {s['unresolved_rate']:.3f} · 召回 {s['recall_layer1']} · "
+                  f"判恶意 {s['closed_malicious']} · "
                   f"耗时 {result['elapsed_s']}s · 未分类信号 {s['unclassified_signals']} · 错误 {s['errors']}",
                   flush=True)
+            print(f"    ClamAV：{cb['scanned']}/{result['count']} 个文件有结果行 · "
+                  f"命中 {cb['found']}（真病毒 {cb['kinds']['malware']} / "
+                  f"启发式 {cb['kinds']['heuristic']} / PUA {cb['kinds']['pua']}）· "
+                  f"{cb['invocations']} 次进程调用 · {cb['elapsed_s']}s"
+                  f"（{cb['per_file_s']}s/文件）· 静默跳过 {len(cb['unreported'])} · "
+                  f"错误 {cb['error'] or '无'}", flush=True)
         all_runs.append(run)
 
     # 一致率：同一批跑两次，逐文件比对 disposition
@@ -226,11 +281,31 @@ def main() -> int:
         consistency = {"files": total, "same": same,
                        "rate": round(same / total, 4) if total else None}
 
+    # 核验铁律第二步：整批的静默降级计数。任一项不为 0，这一批数字作废。
+    verification = {
+        "clamav_engine": engine,
+        "clamav_selftest": selftest,
+        "clamav_unreported_total": sum(
+            len(run[name]["clamav_batch"]["unreported"]) for run in all_runs for name in run),
+        "clamav_errors_total": sum(
+            1 for run in all_runs for name in run if run[name]["clamav_batch"]["error"]),
+        "unclassified_signals_total": sum(
+            run[name]["summary"]["unclassified_signals"] for run in all_runs for name in run),
+        "file_errors_total": sum(run[name]["summary"]["errors"] for run in all_runs for name in run),
+    }
+    verification["ok"] = bool(
+        selftest.get("ok")
+        and not verification["clamav_unreported_total"]
+        and not verification["clamav_errors_total"]
+        and not verification["unclassified_signals_total"]
+    )
+
     payload = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "gate": args.gate,
         "runs": len(all_runs),
         "consistency": consistency,
+        "verification": verification,
         "corpora": {name: all_runs[0][name] for name in all_runs[0]},
         "all_runs": all_runs,
     }
@@ -239,6 +314,7 @@ def main() -> int:
     print(f"\n写入 {out_path}")
     if consistency:
         print(f"两次一致率：{consistency['rate']}（{consistency['same']}/{consistency['files']}）")
+    print(f"核验：{json.dumps(verification, ensure_ascii=False)[:600]}")
     return 0
 
 

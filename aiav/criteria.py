@@ -52,7 +52,10 @@ from enum import Enum
 from typing import Any, Iterable, Mapping
 
 from aiav.assemblyline_core.scoring import (
+    MALICIOUS_SCORE,
     SCORE_BANDS,
+    SUSPICIOUS_SCORE,
+    WEAK_MAX,
     DeterministicVerdict,
     Disposition,
     HeuristicScore,
@@ -63,7 +66,6 @@ from aiav.assemblyline_core.scoring import (
     score_heuristic,
     tier_of,
 )
-from aiav.assemblyline_core.attack_ids import describe as describe_attack
 
 # --------------------------------------------------------------------------------------
 # 刻度
@@ -72,15 +74,16 @@ from aiav.assemblyline_core.attack_ids import describe as describe_attack
 SIGNAL_UNIT = 25
 
 #: 送审闸门：确定性层分数到这儿才把文件交给 AI。
-#: 300 = 上游 `verdict.suspicious`，等价于老口径的 12（"两条弱信号才过线"）。
-AI_GATE = 300
+#: 值**从上游 `DEFAULT_VERDICTS["suspicious"]` 读**（300），等价于老口径的 12
+#: （"两条弱信号才过线"）—— 不是我们写死的字面量。
+AI_GATE = SUSPICIOUS_SCORE
 
 #: 强可疑档下界（上游 verdict.suspicious 之上的 `highly_suspicious` 是 700；
 #: 我们把 500 作为"送 AI 且优先"的下界 —— 与 Assemblyline 文档里的三档描述一致）。
-STRONG_FLOOR = 500
+STRONG_FLOOR = WEAK_MAX
 
-#: 确定性结案分（上游 verdict.malicious）。
-CONCLUSIVE_SCORE = 1000
+#: 确定性结案分（上游 `DEFAULT_VERDICTS["malicious"]` = 1000）。
+CONCLUSIVE_SCORE = MALICIOUS_SCORE
 
 
 class Direction(str, Enum):
@@ -151,15 +154,45 @@ CRITERIA: dict[str, Criterion] = {
         _c(
             heur_id="DET_CLAMAV_SIGNATURE",
             name="ClamAV 病毒库命中",
-            description="传统 AV 引擎的签名命中。上游明说 ≥1000 档的分数就来自这类签名服务 —— "
-                        "单条即可定恶意，几乎无误报。",
+            description="传统 AV 引擎的**真病毒签名**命中（`Win.Trojan.Zbot-9757924-0` 这类）。"
+                        "上游明说 ≥1000 档的分数就来自这类签名服务 —— 单条即可定恶意，几乎无误报。",
             direction=Direction.MALICIOUS,
             score=CONCLUSIVE_SCORE,
             max_score=CONCLUSIVE_SCORE,
             filetype="*",
-            produced_by="clamscan / clamdscan（**本机未安装，见报告核验一节**）",
+            produced_by="clamscan --no-summary --stdout（aiav.tools.clamav_scan_batch，批量调用）",
             attack_ids=("T1204.002",),
             conclusive=True,
+        ),
+        # 同一条产出方的另外两档。**分开成三条判据、不是一条判据配三档分数**，原因是
+        # `decide()` 认的是判据 ID 上的 `conclusive` 标记，不是分数：一条判据既可能给出
+        # 1000（真病毒）也可能给出 300（启发式），只用一个 ID 就会把启发式命中一起结案。
+        _c(
+            heur_id="DET_CLAMAV_HEUR",
+            name="ClamAV 启发式命中",
+            description="签名名带 `HEUR:` / `HEUR/` / `Heur.` 前缀 —— 这是**启发式判定**，"
+                        "不是签名身份匹配：ClamAV 自己也不知道它是什么家族，只判断『像』。"
+                        "所以**不算 1000 分**，按可疑处理送 AI 复核。"
+                        "多条启发式命中最多堆到 500（强可疑，优先送审），永远不结案。",
+            direction=Direction.SUSPECT,
+            score=SUSPICIOUS_SCORE,
+            max_score=STRONG_FLOOR,
+            filetype="*",
+            produced_by="clamscan --no-summary --stdout（aiav.tools.classify_clamav_signature → heuristic）",
+            attack_ids=("T1027",),
+        ),
+        _c(
+            heur_id="DET_CLAMAV_PUA",
+            name="ClamAV PUA / adware 命中",
+            description="PUA / adware / riskware / spyware 这类**按定义就不是恶意软件**的命中。"
+                        "上游 `kw_score_revision_map` 里 `adware: 0` —— 分数归零，只留痕："
+                        "签名名照原样进报告的证据链（它是 `signature.name`，也是复核时要看的东西），"
+                        "但**不参与定级**、不因此送审。",
+            direction=Direction.SUSPECT,
+            score=0,
+            max_score=0,
+            filetype="*",
+            produced_by="clamscan --no-summary --stdout（aiav.tools.classify_clamav_signature → pua）",
         ),
         _c(
             heur_id="DET_EICAR",
@@ -570,6 +603,10 @@ _REASON_RULES: tuple[tuple[str, str], ...] = (
     ("读取失败", "READ_ERROR"),
     ("EICAR 测试文件", "DET_EICAR"),
     ("命中本地恶意哈希库", "DET_KNOWN_BAD_HASH"),
+    # ClamAV 三档（产出方是同一个，档位靠签名名分）
+    ("ClamAV 启发式命中", "DET_CLAMAV_HEUR"),
+    ("ClamAV PUA 命中", "DET_CLAMAV_PUA"),
+    ("ClamAV 命中", "DET_CLAMAV_SIGNATURE"),
     ("弱 YARA 命中", "WEAK_YARA"),
     ("YARA 命中", "STRONG_YARA"),
     ("高风险扩展名", "HIGH_RISK_EXTENSION"),
@@ -615,6 +652,7 @@ _REASON_RULES: tuple[tuple[str, str], ...] = (
 ATTACK_EXEMPT: dict[str, str] = {
     "READ_ERROR": "文件读不出来是**采集失败**，不是攻击者的技术，硬套一个 ATT&CK ID 是编的。",
     "XLM_INFO_PATTERN": "这条**不计分**（只留痕），给它挂 ATT&CK ID 会让人以为它参与判定。",
+    "DET_CLAMAV_PUA": "PUA 命中分数归零（只留痕，上游 `adware: 0`），同样不该挂 ATT&CK ID。",
 }
 
 #: 结构信号里有几条**权重为 0 的已弃用信号**，它们只留痕、不进判据表。
@@ -702,7 +740,6 @@ def score_hits(hits: Iterable[CriterionHit]) -> list[ScoredHeuristic]:
             frequency=hit.frequency if crit.frequency_scaled else 1,
             signatures=sig_freq or None,
             signature_safe={name: hit.safelisted for name in hit.signatures} or None,
-            attack_lookup=describe_attack,
         )
         out.append(scored)
     return out

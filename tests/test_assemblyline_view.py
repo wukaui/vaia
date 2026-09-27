@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aiav.assemblyline_core.odm.models.result import Result
+from assemblyline.odm.models.result import Result
 from aiav.assemblyline_view import (
     build_result,
     build_submission,

@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -500,20 +501,276 @@ def capa_ready() -> tuple[bool, str]:
     return True, ""
 
 
-# 跑不了的检测项：不是"没发现问题"，是"根本没跑"。这两件事必须分开告诉 AI，
-# 否则它会把"缺上下文"读成"没风险"（对照 beenuar/AiSOC 的教训）。
-# ClamAV：传统 AV 引擎的签名库命中。上游明说 ≥1000 档（单条即可定恶意、几乎无误报）的
-# 分数就来自这类**签名服务** —— 所以 `DET_CLAMAV_SIGNATURE` 是①层里最有价值的一条判据。
+# --------------------------------------------------------------------------------------
+# ClamAV —— 传统 AV 引擎的签名库命中，①层"确定性结案"抽屉里最实的一条
+# --------------------------------------------------------------------------------------
+# 上游明说 ≥1000 档（单条即可定恶意、几乎无误报）的分数就来自这类**签名服务** ——
+# 所以 `DET_CLAMAV_SIGNATURE` 是①层里最有价值的一条判据。
 #
-# ⚠️ 本机没装 ClamAV（`aiav tools` 里明写"未安装"）。这条判据因此在本轮实测里命中 0，
-# 报告里必须显式标出 —— "没装"不等于"查过了没有"。
+# ⚠️ **必须批量调用**（2026-09-27 实测，本机 3,628,083 条签名）：
+#
+#     单文件、每次重新加载库      6.3 s/文件
+#     一次喂 40 个文件           15.1 s   ≈ 0.38 s/文件（库只加载一次）
+#
+# 一个文件起一次进程 = 把零点几秒的事做成 6.3 秒。所以对外的主入口是
+# `clamav_scan_batch()`（一次进程扫一批）；`clamav_evidence()` 只留给"手上只有一个文件、
+# 没有批次可搭"的兜底路径。
+#
+# 签名名分三类，走三条判据（`criteria.py` 的 `DET_CLAMAV_*`）：
+#     · 真病毒签名（`Win.Trojan.Zbot-9757924-0`）→ 1000 分，确定性结案，永不送 AI
+#     · 启发式（`Heur.AdvML.B` / `HEUR:Trojan.Win32`）→ 300 分，可疑，送 AI（**不算 1000**）
+#     · PUA / adware / riskware → **0 分，只留痕**：上游 `kw_score_revision_map` 里 `adware: 0`，
+#       按定义 PUA 不是恶意软件。签名名照原样进报告的证据链，但不参与定级。
 CLAMAV_TIMEOUT = 120
+#: 一次 `clamscan` 最多带多少个文件 / 命令行参数最长多少字节。
+#: Linux `ARG_MAX` 是 2MB 量级，这里留两个数量级余量 —— 路径长到离谱也不会炸。
+CLAMAV_BATCH_FILES = 400
+CLAMAV_BATCH_ARG_BYTES = 60_000
+
+#: 签名名 → 类别。大小写不敏感，分隔符 `.` `:` `/` 都算（`Heur.AdvML.B` / `HEUR:Trojan` /
+#: `HEUR/Script` 三种写法 ClamAV 家族里都出现过）。
+_CLAMAV_HEUR_RE = re.compile(r"(?:^|[.:/])(?:heur|heuristic)[.:/]", re.I)
+_CLAMAV_PUA_RE = re.compile(
+    r"(?:^|[.:/])(?:pua|riskware|adware|spyware|unwanted|joke|dialer)(?:[.:/]|$)", re.I)
+
+#: 签名库可能落的地方（`CLAMAV_DB` 可覆盖）。只用于报告里记"扫的时候库是哪几份"。
+_CLAMAV_DB_DIRS = ("/var/lib/clamav", "/usr/local/share/clamav", "/var/lib/clamav/db")
+
+
+def classify_clamav_signature(signature: str) -> str:
+    """ClamAV 签名名 → `malware` / `heuristic` / `pua`。
+
+    **空签名名按 `malware` 处理** —— "FOUND 但名字没解析出来"是解析出了问题，
+    不能因为解析失败就把它降成可疑：那等于让 bug 帮忙漏报。
+    """
+    name = (signature or "").strip()
+    if not name:
+        return "malware"
+    if _CLAMAV_HEUR_RE.search(name):
+        return "heuristic"
+    if _CLAMAV_PUA_RE.search(name):
+        return "pua"
+    return "malware"
+
+
+def clamav_db_files() -> list[dict[str, Any]]:
+    """本机签名库文件（main.cvd / daily.cvd / bytecode.cvd…）。核验用：库是哪几份、多大。"""
+    seen: dict[str, dict[str, Any]] = {}
+    for raw_dir in (os.getenv("CLAMAV_DB", "").strip(), *_CLAMAV_DB_DIRS):
+        if not raw_dir:
+            continue
+        d = Path(raw_dir)
+        if not d.is_dir():
+            continue
+        for f in sorted(d.iterdir()):
+            if f.suffix.lower() in {".cvd", ".cld", ".cud"} and f.name not in seen:
+                try:
+                    seen[f.name] = {"name": f.name, "bytes": f.stat().st_size}
+                except OSError:
+                    seen[f.name] = {"name": f.name, "bytes": 0}
+    return list(seen.values())
+
+
+def clamav_engine_info(runner=None) -> dict[str, Any]:
+    """`clamscan --version` + 签名库文件 —— 核验"引擎真的加载了库"。
+
+    输出形如 `ClamAV 1.5.4/28135/Sat Sep 26 14:24:13 2026`：引擎版本 / **库版本** / 库日期。
+    报告里要能看到这三个数 —— "装了 ClamAV" 不等于"库是新的、真加载了"。
+
+    `runner` 只给测试注入用（默认走 subprocess）。
+    """
+    exe = _find_exe("clamscan", "clamdscan", env_var="CLAMAV_EXE")
+    if not exe:
+        return {"available": False, "exe": "", "version": "", "db_version": "", "db_date": "",
+                "db_files": [], "error": "ClamAV 未安装（clamscan / clamdscan 都不在 PATH 里）"}
+    try:
+        proc = runner([exe, "--version"]) if runner is not None else _run([exe, "--version"], 30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"available": True, "exe": exe, "version": "", "db_version": "", "db_date": "",
+                "db_files": clamav_db_files(), "error": f"{type(exc).__name__}: {exc}"}
+
+    out = _decode(proc)
+    line = next((ln.strip() for ln in out.splitlines() if ln.strip().startswith("ClamAV")), "")
+    m = re.match(r"ClamAV\s+(\S+?)/(\d+)/(.*)$", line)
+    return {
+        "available": True,
+        "exe": exe,
+        "version": line,
+        "engine_version": m.group(1) if m else "",
+        "db_version": m.group(2) if m else "",
+        "db_date": (m.group(3).strip() if m else ""),
+        "db_files": clamav_db_files(),
+        "error": "",
+    }
+
+
+def clamav_selftest(runner=None) -> dict[str, Any]:
+    """EICAR 自检：证明"引擎 + 签名库"端到端真的在工作。
+
+    写一个 68 字节的标准 EICAR 测试串到临时文件，走**批量路径**扫它，要求拿到 FOUND。
+    核验铁律里"ClamAV 真的被调用了、真的加载了库"这一条靠两个数一起证：
+    这个自检 + `engine.db_version`。只看 `which clamscan` 是不够的 ——
+    装了但库是空的，一样一条都查不出来，而且长得跟"扫过且干净"一模一样。
+    """
+    # 延迟导入：scanner 反过来 import 本模块，模块级导入会成环。
+    from aiav.scanner import EICAR
+
+    exe = _find_exe("clamscan", "clamdscan", env_var="CLAMAV_EXE")
+    if not exe:
+        return {"ok": False, "signature": "", "scanned": 0, "invocations": 0,
+                "elapsed_s": 0.0, "error": "ClamAV 未安装（clamscan / clamdscan 都不在 PATH 里）"}
+
+    import tempfile
+
+    tmp_dir = Path(tempfile.mkdtemp(prefix="aiav-clamav-selftest-"))
+    probe = tmp_dir / "eicar-test.txt"
+    try:
+        probe.write_bytes(EICAR)
+        batch = clamav_scan_batch([probe], runner=runner)
+        hit = (batch.get("results") or {}).get(str(probe)) or {}
+        return {
+            "ok": bool(hit.get("infected")),
+            "signature": hit.get("signature") or "",
+            "scanned": batch.get("scanned", 0),
+            "invocations": batch.get("invocations", 0),
+            "elapsed_s": batch.get("elapsed_s", 0.0),
+            "error": batch.get("error", ""),
+        }
+    finally:
+        try:
+            probe.unlink(missing_ok=True)
+            tmp_dir.rmdir()
+        except OSError:
+            pass
+
+
+def _run(cmd: list[str], timeout: int = CLAMAV_TIMEOUT):
+    return subprocess.run(cmd, capture_output=True, timeout=timeout)
+
+
+def _decode(proc) -> str:
+    return ((proc.stdout or b"") + (proc.stderr or b"")).decode("utf-8", errors="replace")
+
+
+def _clamav_chunks(paths: list[Path]) -> list[list[Path]]:
+    """把文件列表切成若干批：批内文件数与参数总字节都有上限，避免命令行过长。"""
+    chunks: list[list[Path]] = []
+    chunk: list[Path] = []
+    size = 0
+    for p in paths:
+        s = str(p)
+        if chunk and (len(chunk) >= CLAMAV_BATCH_FILES
+                      or size + len(s) + 1 > CLAMAV_BATCH_ARG_BYTES):
+            chunks.append(chunk)
+            chunk, size = [], 0
+        chunk.append(p)
+        size += len(s) + 1
+    if chunk:
+        chunks.append(chunk)
+    return chunks
+
+
+def _parse_clamav_lines(out: str, known: set[str]):
+    """解析 clamscan 的逐文件结果行，产出 `(路径, 签名名, 是否命中)`。
+
+    两种行：`<路径>: <签名名> FOUND` 与 `<路径>: OK`。
+    路径里带 `": "` 的少数派按 `known`（本批真正传进去的路径）做最长前缀匹配兜底 ——
+    签名名本身不含 `": "`（ClamAV 的 `.hdb` 格式拿 `:` 当分隔符），所以先按最后一个 `": "` 切。
+    """
+    for raw_line in out.splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            continue
+        if line.endswith(" FOUND"):
+            path, sep, sig = line[: -len(" FOUND")].rpartition(": ")
+            if not sep:
+                continue
+            infected, signature = True, sig.strip()
+        elif line.endswith(": OK"):
+            path, infected, signature = line[: -len(": OK")], False, ""
+        else:
+            continue
+
+        if path not in known:
+            matched = max((k for k in known if line.startswith(k + ": ")), key=len, default=None)
+            if matched is None:
+                continue
+            rest = line[len(matched) + 2:]
+            if rest.endswith(" FOUND"):
+                path, infected, signature = matched, True, rest[: -len(" FOUND")].strip()
+            elif rest == "OK":
+                path, infected, signature = matched, False, ""
+            else:
+                continue
+        yield path, signature, infected
+
+
+def clamav_scan_batch(paths, runner=None) -> dict[str, Any]:
+    """**一次 `clamscan` 扫一批文件**（只读扫描：不执行样本、不上传、不联网）。
+
+    返回：
+
+        available     引擎在不在（`False` = 没装，调用方必须记成"未产出"）
+        results       `{路径: {infected, signature, kind}}`，`kind` ∈ malware/heuristic/pua
+        scanned       输出里**真的出现结果行**的文件数
+        found         命中数
+        kinds         `{malware, heuristic, pua}` 命中数（真病毒 vs 启发式 vs PUA 各多少）
+        unreported    传进去但输出里没有的文件（**静默跳过**，必须为 0）
+        invocations   起了几次 clamscan 进程（批量的证据就是它远小于文件数）
+        elapsed_s     本批 ClamAV 总耗时
+        engine        `clamav_engine_info()`（引擎版本 / 库版本 / 库文件）
+
+    核验口径写死在返回值里，报告直接引用 —— `unreported` 不为 0 的那一批按核验铁律作废：
+    没出现在输出里 = 没扫，**不等于**扫过且干净。
+
+    `runner` 只给测试注入用（默认走 subprocess）。
+    """
+    paths = [Path(p) for p in paths]
+    result: dict[str, Any] = {
+        "available": False, "results": {}, "scanned": 0, "found": 0,
+        "kinds": {"malware": 0, "heuristic": 0, "pua": 0},
+        "unreported": [str(p) for p in paths], "invocations": 0, "elapsed_s": 0.0,
+        "engine": {}, "error": "",
+    }
+    exe = _find_exe("clamscan", "clamdscan", env_var="CLAMAV_EXE")
+    if not exe:
+        result["error"] = "ClamAV 未安装（clamscan / clamdscan 都不在 PATH 里）"
+        result["engine"] = clamav_engine_info(runner=runner)
+        return result
+
+    result["available"] = True
+    result["engine"] = clamav_engine_info(runner=runner)
+    started = time.time()
+    for chunk in _clamav_chunks(paths):
+        known = {str(p) for p in chunk}
+        cmd = [exe, "--no-summary", "--stdout", *[str(p) for p in chunk]]
+        result["invocations"] += 1
+        try:
+            proc = runner(cmd) if runner is not None else _run(cmd)
+        except (OSError, subprocess.SubprocessError) as exc:
+            result["error"] = f"{type(exc).__name__}: {exc}"
+            continue
+        for path, signature, infected in _parse_clamav_lines(_decode(proc), known):
+            kind = classify_clamav_signature(signature) if infected else ""
+            result["results"][path] = {
+                "infected": bool(infected), "signature": signature, "kind": kind,
+            }
+            if infected:
+                result["found"] += 1
+                result["kinds"][kind] = result["kinds"].get(kind, 0) + 1
+    result["scanned"] = len(result["results"])
+    result["elapsed_s"] = round(time.time() - started, 2)
+    result["unreported"] = [str(p) for p in paths if str(p) not in result["results"]]
+    return result
 
 
 def clamav_evidence(path: Path, runner=None) -> dict[str, Any]:
-    """跑一次 ClamAV（只读扫描，不上传、不联网）。
+    """跑一次 ClamAV 扫**单个文件**（只读扫描，不上传、不联网）。
 
-    返回 `{available, infected, signature, raw, error}`。
+    ⚠️ 这是兜底路径：**每次调用都要重新加载 362 万条签名（6.3 s）**。手上有批次时走
+    `clamav_scan_batch()`，别在循环里调这个。
+
+    返回 `{available, infected, signature, kind, batch, raw, error}`。
     `available=False` 表示**本机没有 ClamAV** —— 调用方据此把这条判据记成"未产出"，
     不许当成"扫过且干净"。
 
@@ -521,35 +778,48 @@ def clamav_evidence(path: Path, runner=None) -> dict[str, Any]:
     """
     exe = _find_exe("clamscan", "clamdscan", env_var="CLAMAV_EXE")
     if not exe:
-        return {"available": False, "infected": False, "signature": "",
-                "raw": "", "error": "ClamAV 未安装（clamscan / clamdscan 都不在 PATH 里）"}
+        return {"available": False, "infected": False, "signature": "", "kind": "",
+                "batch": False, "raw": "",
+                "error": "ClamAV 未安装（clamscan / clamdscan 都不在 PATH 里）"}
 
     cmd = [exe, "--no-summary", "--stdout", str(path)]
     try:
-        if runner is not None:
-            proc = runner(cmd)
-        else:
-            proc = subprocess.run(cmd, capture_output=True, timeout=CLAMAV_TIMEOUT)
+        proc = runner(cmd) if runner is not None else _run(cmd)
     except (OSError, subprocess.SubprocessError) as exc:
-        return {"available": True, "infected": False, "signature": "", "raw": "",
-                "error": f"{type(exc).__name__}: {exc}"}
+        return {"available": True, "infected": False, "signature": "", "kind": "",
+                "batch": False, "raw": "", "error": f"{type(exc).__name__}: {exc}"}
 
-    out = ((proc.stdout or b"") + (proc.stderr or b"")).decode("utf-8", errors="replace")
-    # clamscan 命中时退出码 1，输出形如 `/path/file: Win.Trojan.Agent-123 FOUND`
-    infected = "FOUND" in out
-    signature = ""
-    if infected:
-        line = next((ln for ln in out.splitlines() if "FOUND" in ln), "")
-        signature = line.split(":", 1)[1].replace("FOUND", "").strip() if ":" in line else line.strip()
+    out = _decode(proc)
+    hit = next((h for h in _parse_clamav_lines(out, {str(path)}) if h[0] == str(path)), None)
+    infected = bool(hit and hit[2])
+    signature = hit[1] if infected else ""
     return {"available": True, "infected": infected, "signature": signature,
-            "raw": out.strip()[:500], "error": ""}
+            "kind": classify_clamav_signature(signature) if infected else "",
+            "batch": False, "raw": out.strip()[:500], "error": ""}
+
+
+def clamav_ready() -> tuple[bool, str]:
+    """ClamAV 能不能真的用：装了 + 读得到签名库。返回 `(可用, 原因)`。"""
+    if not _find_exe("clamscan", "clamdscan", env_var="CLAMAV_EXE"):
+        return False, "未安装（没有传统 AV 基线可对照）"
+    info = clamav_engine_info()
+    if info.get("error"):
+        return False, f"已装但跑不起来（{info['error']}）"
+    if not info.get("db_version") or info["db_version"] == "0":
+        return False, "已装但没读到签名库（跑 freshclam 更新）"
+    return True, ""
 
 
 def unavailable_detections() -> list[str]:
-    """返回本次环境不可用的检测项及原因（写进送审提示词）。"""
+    """返回本次环境不可用的检测项及原因（写进送审提示词）。
+
+    跑不了的检测项：不是"没发现问题"，是"根本没跑"。这两件事必须分开告诉 AI，
+    否则它会把"缺上下文"读成"没风险"（对照 beenuar/AiSOC 的教训）。
+    """
     items: list[str] = []
-    if not _find_exe("clamscan", "clamdscan", env_var="CLAMAV_EXE"):
-        items.append("ClamAV —— 未安装（没有传统 AV 基线可对照）")
+    clamav_ok, clamav_why = clamav_ready()
+    if not clamav_ok:
+        items.append(f"ClamAV —— {clamav_why}")
     capa_ok, capa_why = capa_ready()
     if not capa_ok:
         items.append(f"capa —— {capa_why}")

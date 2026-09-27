@@ -1,8 +1,8 @@
 """报告结构 —— 照 Assemblyline 的 `Result` 模型摆证据链。
 
-我们抄它的模型不是为了好看，是为了让报告**能过它的 schema**：
-`build_result()` 的产物会被 `aiav.assemblyline_core.odm.models.result.Result` 校验一遍，
-校验不过就是 bug（`tests/test_assemblyline_view.py` 盯着这条）。
+我们照它的模型摆证据不是为了好看，是为了让报告**能过它的 schema**：
+`build_result()` 的产物会被**上游包里那个真的** `assemblyline.odm.models.result.Result`
+校验一遍，校验不过就是 bug（`tests/test_assemblyline_view.py` 盯着这条）。
 
 字段对应关系（左边是我们的，右边是上游的）：
 
@@ -142,10 +142,12 @@ def _safelisted_tags(report: FileReport, hits: list[dict]) -> dict[str, list[str
 # sections：一条判据 = 一段证据
 # --------------------------------------------------------------------------------------
 def _section_for(hit: dict, *, stats: dict[str, Any] | None, depth: int = 0) -> dict[str, Any]:
+    # 上游 `Heuristic` 展开出来的形状是 {attack_id, pattern, categories}；
+    # `pattern` 就是技术名（老版本我们自己的 lookup 给的是 `name`，两个都认）。
     attack = [
         {
             "attack_id": a.get("attack_id", ""),
-            "pattern": a.get("name", a.get("attack_id", "")),
+            "pattern": a.get("pattern") or a.get("name") or a.get("attack_id", ""),
             "categories": a.get("categories", []),
         }
         for a in (hit.get("attack") or [])
@@ -328,8 +330,8 @@ def build_submission(
 
 
 def validate_result(payload: dict[str, Any]) -> None:
-    """用**抄来的上游模型**校验报告结构。校验不过就说明"照它改"没改到位。"""
-    from aiav.assemblyline_core.odm.models.result import Result  # noqa: PLC0415
+    """用**上游包里那个模型**校验报告结构。校验不过就说明"照它改"没改到位。"""
+    from assemblyline.odm.models.result import Result  # noqa: PLC0415
 
     Result(payload)
 
