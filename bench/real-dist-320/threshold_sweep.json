@@ -1,0 +1,1382 @@
+{
+  "generated_at": "2026-09-27T16:18:00",
+  "kind_note": "measured = 真跑出来的；extrapolated = 抽样均值乘规模（不许当实测）；derived = 由前两者算出",
+  "corpus": {
+    "path": "/tmp/real-dist-320/files",
+    "total": 320,
+    "n_malicious": 20,
+    "n_benign": 300,
+    "note": "300 良性 + 20 恶意；1 个 114.8MB 的大文件被 CLI 的 50MB 上限挡掉，所以每档实际扫到 319 个（闸门 0 那一轮同理）"
+  },
+  "score_distribution": {
+    "0": 196,
+    "1-299": 106,
+    "300-499": 1,
+    ">=1000": 17
+  },
+  "unit_price_cny_per_million": 8.0,
+  "tiers": [
+    {
+      "label": "g300",
+      "gate": 300,
+      "config": {
+        "ai_threshold": 300,
+        "deep_evidence_threshold": 0,
+        "extra_args": "",
+        "workers": 6,
+        "cache": "AI_AV_CACHE=0（关缓存，保证每档真跑）",
+        "state_dir": "/tmp/thr-sweep/state-g300（每档独立，空缓存）"
+      },
+      "kind": "measured",
+      "files_scanned": 319,
+      "routed_to_ai": 1,
+      "routed_declared_send_ai": 1,
+      "send_rate": 0.0031,
+      "send_rate_cli": 0.0031,
+      "send_rate_denominator_note": "脚本口径分母 = 语料 320 个；CLI 口径分母 = 实际扫到的 319 个（1 个 114.8MB 大文件被 50MB 上限挡掉）",
+      "cli_ledger": {
+        "kind": "measured",
+        "send_rate": 0.0031,
+        "sent": 1,
+        "closed_malicious": 17,
+        "closed_clean": 28,
+        "closed_rate": 0.1411,
+        "unresolved": 273,
+        "unclassified_signals": 0,
+        "unavailable_detections": [
+          "VirusTotal —— 未配置 API Key（拿不到外部多引擎票数）"
+        ],
+        "tokens": 7019,
+        "requests": 1,
+        "files_charged": 1,
+        "files_skipped_by_budget": 0,
+        "files_degraded": 0,
+        "files_with_retry": 0,
+        "errors": 0,
+        "scan_skips": {
+          "total": 1,
+          "by_reason": {
+            "too_large": 1
+          },
+          "max_size_mb": 50,
+          "include_system": false
+        }
+      },
+      "ai_used": 1,
+      "ai_degraded_to_rules": 0,
+      "degraded_files": [],
+      "ai_verdict_dist": {
+        "malicious": 0,
+        "suspicious": 1,
+        "clean": 0
+      },
+      "recall_layer1": 0.9,
+      "recall_layer1_hits": 18,
+      "recall_ai": 0.9,
+      "recall_ai_hits": 18,
+      "recall_delta_vs_layer1": 0.0,
+      "n_malicious": 20,
+      "still_missed_malicious": [
+        "/tmp/real-dist-320/files/malware/06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe",
+        "/tmp/real-dist-320/files/malware/11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe"
+      ],
+      "ai_delta": {
+        "kind": "measured",
+        "malicious_flagged_by_ai": [
+          "/tmp/real-dist-320/files/malware/08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe"
+        ],
+        "malicious_flagged_suspicious": [
+          "/tmp/real-dist-320/files/malware/08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe"
+        ],
+        "benign_false_flags": [],
+        "net_flagged_files": 1
+      },
+      "cost": {
+        "ai_judgement": {
+          "kind": "measured",
+          "tokens": 7019,
+          "cny": 0.0562,
+          "tokens_per_ai_file": 7019.0,
+          "tokens_per_corpus_file": 21.9,
+          "median_tokens": 7019
+        },
+        "evidence_preload": {
+          "kind": "measured",
+          "seconds_total": 5.1,
+          "seconds_per_ai_file": 5.1,
+          "deep_forensics_done": 1,
+          "deep_forensics_skipped": 0,
+          "note": "capa/floss 等预采集的**逐文件实测**耗时，与模型调用分开计时"
+        },
+        "ai_self_tool_calls": {
+          "kind": "measured",
+          "calls": 0,
+          "files_deep_dive": 0,
+          "note": "送审之后 AI **自己**又调了几次工具（分流档要看这个：跳过的 capa/floss 若被 AI 补回来，分流的收益就没了）"
+        },
+        "wall_clock_s": 134.4,
+        "wall_s_per_ai_file": 134.4,
+        "wall_s_per_corpus_file": 0.42
+      },
+      "verification": {
+        "from_cache": 0,
+        "file_errors": 0,
+        "error_files": []
+      }
+    },
+    {
+      "label": "g200",
+      "gate": 200,
+      "config": {
+        "ai_threshold": 200,
+        "deep_evidence_threshold": 0,
+        "extra_args": "",
+        "workers": 6,
+        "cache": "AI_AV_CACHE=0（关缓存，保证每档真跑）",
+        "state_dir": "/tmp/thr-sweep/state-g200（每档独立，空缓存）"
+      },
+      "kind": "measured",
+      "files_scanned": 319,
+      "routed_to_ai": 8,
+      "routed_declared_send_ai": 1,
+      "send_rate": 0.025,
+      "send_rate_cli": 0.0251,
+      "send_rate_denominator_note": "脚本口径分母 = 语料 320 个；CLI 口径分母 = 实际扫到的 319 个（1 个 114.8MB 大文件被 50MB 上限挡掉）",
+      "cli_ledger": {
+        "kind": "measured",
+        "send_rate": 0.0251,
+        "sent": 8,
+        "closed_malicious": 17,
+        "closed_clean": 28,
+        "closed_rate": 0.1411,
+        "unresolved": 273,
+        "unclassified_signals": 0,
+        "unavailable_detections": [
+          "VirusTotal —— 未配置 API Key（拿不到外部多引擎票数）"
+        ],
+        "tokens": 72509,
+        "requests": 8,
+        "files_charged": 8,
+        "files_skipped_by_budget": 0,
+        "files_degraded": 0,
+        "files_with_retry": 0,
+        "errors": 0,
+        "scan_skips": {
+          "total": 1,
+          "by_reason": {
+            "too_large": 1
+          },
+          "max_size_mb": 50,
+          "include_system": false
+        }
+      },
+      "ai_used": 8,
+      "ai_degraded_to_rules": 0,
+      "degraded_files": [],
+      "ai_verdict_dist": {
+        "malicious": 1,
+        "suspicious": 1,
+        "clean": 6
+      },
+      "recall_layer1": 0.95,
+      "recall_layer1_hits": 19,
+      "recall_ai": 0.95,
+      "recall_ai_hits": 19,
+      "recall_delta_vs_layer1": 0.0,
+      "n_malicious": 20,
+      "still_missed_malicious": [
+        "/tmp/real-dist-320/files/malware/06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe"
+      ],
+      "ai_delta": {
+        "kind": "measured",
+        "malicious_flagged_by_ai": [
+          "/tmp/real-dist-320/files/malware/08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe",
+          "/tmp/real-dist-320/files/malware/11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe"
+        ],
+        "malicious_flagged_suspicious": [
+          "/tmp/real-dist-320/files/malware/08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe"
+        ],
+        "benign_false_flags": [],
+        "net_flagged_files": 2
+      },
+      "cost": {
+        "ai_judgement": {
+          "kind": "measured",
+          "tokens": 72509,
+          "cny": 0.5801,
+          "tokens_per_ai_file": 9063.6,
+          "tokens_per_corpus_file": 226.6,
+          "median_tokens": 9187
+        },
+        "evidence_preload": {
+          "kind": "measured",
+          "seconds_total": 516.8,
+          "seconds_per_ai_file": 64.6,
+          "deep_forensics_done": 8,
+          "deep_forensics_skipped": 0,
+          "note": "capa/floss 等预采集的**逐文件实测**耗时，与模型调用分开计时"
+        },
+        "ai_self_tool_calls": {
+          "kind": "measured",
+          "calls": 0,
+          "files_deep_dive": 0,
+          "note": "送审之后 AI **自己**又调了几次工具（分流档要看这个：跳过的 capa/floss 若被 AI 补回来，分流的收益就没了）"
+        },
+        "wall_clock_s": 328.3,
+        "wall_s_per_ai_file": 41.0,
+        "wall_s_per_corpus_file": 1.026
+      },
+      "verification": {
+        "from_cache": 0,
+        "file_errors": 0,
+        "error_files": []
+      }
+    },
+    {
+      "label": "g200-deep300",
+      "gate": 200,
+      "config": {
+        "ai_threshold": 200,
+        "deep_evidence_threshold": 300,
+        "extra_args": "--deep-evidence-threshold 300",
+        "workers": 6,
+        "cache": "AI_AV_CACHE=0（关缓存，保证每档真跑）",
+        "state_dir": "/tmp/thr-sweep/state-g200-deep300（每档独立，空缓存）"
+      },
+      "kind": "measured",
+      "files_scanned": 319,
+      "routed_to_ai": 8,
+      "routed_declared_send_ai": 1,
+      "send_rate": 0.025,
+      "send_rate_cli": 0.0251,
+      "send_rate_denominator_note": "脚本口径分母 = 语料 320 个；CLI 口径分母 = 实际扫到的 319 个（1 个 114.8MB 大文件被 50MB 上限挡掉）",
+      "cli_ledger": {
+        "kind": "measured",
+        "send_rate": 0.0251,
+        "sent": 8,
+        "closed_malicious": 17,
+        "closed_clean": 28,
+        "closed_rate": 0.1411,
+        "unresolved": 273,
+        "unclassified_signals": 0,
+        "unavailable_detections": [
+          "VirusTotal —— 未配置 API Key（拿不到外部多引擎票数）"
+        ],
+        "tokens": 61535,
+        "requests": 8,
+        "files_charged": 8,
+        "files_skipped_by_budget": 0,
+        "files_degraded": 0,
+        "files_with_retry": 0,
+        "errors": 0,
+        "scan_skips": {
+          "total": 1,
+          "by_reason": {
+            "too_large": 1
+          },
+          "max_size_mb": 50,
+          "include_system": false
+        }
+      },
+      "ai_used": 8,
+      "ai_degraded_to_rules": 0,
+      "degraded_files": [],
+      "ai_verdict_dist": {
+        "malicious": 0,
+        "suspicious": 2,
+        "clean": 6
+      },
+      "recall_layer1": 0.95,
+      "recall_layer1_hits": 19,
+      "recall_ai": 0.95,
+      "recall_ai_hits": 19,
+      "recall_delta_vs_layer1": 0.0,
+      "n_malicious": 20,
+      "still_missed_malicious": [
+        "/tmp/real-dist-320/files/malware/06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe"
+      ],
+      "ai_delta": {
+        "kind": "measured",
+        "malicious_flagged_by_ai": [
+          "/tmp/real-dist-320/files/malware/08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe",
+          "/tmp/real-dist-320/files/malware/11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe"
+        ],
+        "malicious_flagged_suspicious": [
+          "/tmp/real-dist-320/files/malware/08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe",
+          "/tmp/real-dist-320/files/malware/11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe"
+        ],
+        "benign_false_flags": [],
+        "net_flagged_files": 2
+      },
+      "cost": {
+        "ai_judgement": {
+          "kind": "measured",
+          "tokens": 61535,
+          "cny": 0.4923,
+          "tokens_per_ai_file": 7691.9,
+          "tokens_per_corpus_file": 192.3,
+          "median_tokens": 7468
+        },
+        "evidence_preload": {
+          "kind": "measured",
+          "seconds_total": 7.0,
+          "seconds_per_ai_file": 0.9,
+          "deep_forensics_done": 1,
+          "deep_forensics_skipped": 7,
+          "note": "capa/floss 等预采集的**逐文件实测**耗时，与模型调用分开计时"
+        },
+        "ai_self_tool_calls": {
+          "kind": "measured",
+          "calls": 0,
+          "files_deep_dive": 0,
+          "note": "送审之后 AI **自己**又调了几次工具（分流档要看这个：跳过的 capa/floss 若被 AI 补回来，分流的收益就没了）"
+        },
+        "wall_clock_s": 155.8,
+        "wall_s_per_ai_file": 19.5,
+        "wall_s_per_corpus_file": 0.487
+      },
+      "verification": {
+        "from_cache": 0,
+        "file_errors": 0,
+        "error_files": []
+      }
+    },
+    {
+      "label": "g200b",
+      "gate": 200,
+      "config": {
+        "ai_threshold": 200,
+        "deep_evidence_threshold": 0,
+        "extra_args": "",
+        "workers": 6,
+        "cache": "AI_AV_CACHE=0（关缓存，保证每档真跑）",
+        "state_dir": "/tmp/thr-sweep/state-g200b（每档独立，空缓存）"
+      },
+      "kind": "measured",
+      "files_scanned": 319,
+      "routed_to_ai": 8,
+      "routed_declared_send_ai": 1,
+      "send_rate": 0.025,
+      "send_rate_cli": 0.0251,
+      "send_rate_denominator_note": "脚本口径分母 = 语料 320 个；CLI 口径分母 = 实际扫到的 319 个（1 个 114.8MB 大文件被 50MB 上限挡掉）",
+      "cli_ledger": {
+        "kind": "measured",
+        "send_rate": 0.0251,
+        "sent": 8,
+        "closed_malicious": 17,
+        "closed_clean": 28,
+        "closed_rate": 0.1411,
+        "unresolved": 273,
+        "unclassified_signals": 0,
+        "unavailable_detections": [
+          "VirusTotal —— 未配置 API Key（拿不到外部多引擎票数）"
+        ],
+        "tokens": 71715,
+        "requests": 8,
+        "files_charged": 8,
+        "files_skipped_by_budget": 0,
+        "files_degraded": 0,
+        "files_with_retry": 0,
+        "errors": 0,
+        "scan_skips": {
+          "total": 1,
+          "by_reason": {
+            "too_large": 1
+          },
+          "max_size_mb": 50,
+          "include_system": false
+        }
+      },
+      "ai_used": 8,
+      "ai_degraded_to_rules": 0,
+      "degraded_files": [],
+      "ai_verdict_dist": {
+        "malicious": 1,
+        "suspicious": 1,
+        "clean": 6
+      },
+      "recall_layer1": 0.95,
+      "recall_layer1_hits": 19,
+      "recall_ai": 0.95,
+      "recall_ai_hits": 19,
+      "recall_delta_vs_layer1": 0.0,
+      "n_malicious": 20,
+      "still_missed_malicious": [
+        "/tmp/real-dist-320/files/malware/06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe"
+      ],
+      "ai_delta": {
+        "kind": "measured",
+        "malicious_flagged_by_ai": [
+          "/tmp/real-dist-320/files/malware/08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe",
+          "/tmp/real-dist-320/files/malware/11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe"
+        ],
+        "malicious_flagged_suspicious": [
+          "/tmp/real-dist-320/files/malware/08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe"
+        ],
+        "benign_false_flags": [],
+        "net_flagged_files": 2
+      },
+      "cost": {
+        "ai_judgement": {
+          "kind": "measured",
+          "tokens": 71715,
+          "cny": 0.5737,
+          "tokens_per_ai_file": 8964.4,
+          "tokens_per_corpus_file": 224.1,
+          "median_tokens": 9269
+        },
+        "evidence_preload": {
+          "kind": "measured",
+          "seconds_total": 517.8,
+          "seconds_per_ai_file": 64.7,
+          "deep_forensics_done": 8,
+          "deep_forensics_skipped": 0,
+          "note": "capa/floss 等预采集的**逐文件实测**耗时，与模型调用分开计时"
+        },
+        "ai_self_tool_calls": {
+          "kind": "measured",
+          "calls": 0,
+          "files_deep_dive": 0,
+          "note": "送审之后 AI **自己**又调了几次工具（分流档要看这个：跳过的 capa/floss 若被 AI 补回来，分流的收益就没了）"
+        },
+        "wall_clock_s": 318.7,
+        "wall_s_per_ai_file": 39.8,
+        "wall_s_per_corpus_file": 0.996
+      },
+      "verification": {
+        "from_cache": 0,
+        "file_errors": 0,
+        "error_files": []
+      }
+    },
+    {
+      "label": "g150",
+      "gate": 150,
+      "config": {
+        "ai_threshold": 150,
+        "deep_evidence_threshold": 0,
+        "extra_args": "",
+        "workers": 6,
+        "cache": "AI_AV_CACHE=0（关缓存，保证每档真跑）",
+        "state_dir": "/tmp/thr-sweep/state-g150（每档独立，空缓存）"
+      },
+      "kind": "measured",
+      "files_scanned": 319,
+      "routed_to_ai": 9,
+      "routed_declared_send_ai": 1,
+      "send_rate": 0.0281,
+      "send_rate_cli": 0.0282,
+      "send_rate_denominator_note": "脚本口径分母 = 语料 320 个；CLI 口径分母 = 实际扫到的 319 个（1 个 114.8MB 大文件被 50MB 上限挡掉）",
+      "cli_ledger": {
+        "kind": "measured",
+        "send_rate": 0.0282,
+        "sent": 9,
+        "closed_malicious": 17,
+        "closed_clean": 28,
+        "closed_rate": 0.1411,
+        "unresolved": 273,
+        "unclassified_signals": 0,
+        "unavailable_detections": [
+          "VirusTotal —— 未配置 API Key（拿不到外部多引擎票数）"
+        ],
+        "tokens": 87773,
+        "requests": 9,
+        "files_charged": 9,
+        "files_skipped_by_budget": 0,
+        "files_degraded": 0,
+        "files_with_retry": 0,
+        "errors": 0,
+        "scan_skips": {
+          "total": 1,
+          "by_reason": {
+            "too_large": 1
+          },
+          "max_size_mb": 50,
+          "include_system": false
+        }
+      },
+      "ai_used": 9,
+      "ai_degraded_to_rules": 0,
+      "degraded_files": [],
+      "ai_verdict_dist": {
+        "malicious": 0,
+        "suspicious": 2,
+        "clean": 7
+      },
+      "recall_layer1": 0.95,
+      "recall_layer1_hits": 19,
+      "recall_ai": 0.95,
+      "recall_ai_hits": 19,
+      "recall_delta_vs_layer1": 0.0,
+      "n_malicious": 20,
+      "still_missed_malicious": [
+        "/tmp/real-dist-320/files/malware/06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe"
+      ],
+      "ai_delta": {
+        "kind": "measured",
+        "malicious_flagged_by_ai": [
+          "/tmp/real-dist-320/files/malware/08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe",
+          "/tmp/real-dist-320/files/malware/11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe"
+        ],
+        "malicious_flagged_suspicious": [
+          "/tmp/real-dist-320/files/malware/08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe",
+          "/tmp/real-dist-320/files/malware/11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe"
+        ],
+        "benign_false_flags": [],
+        "net_flagged_files": 2
+      },
+      "cost": {
+        "ai_judgement": {
+          "kind": "measured",
+          "tokens": 87773,
+          "cny": 0.7022,
+          "tokens_per_ai_file": 9752.6,
+          "tokens_per_corpus_file": 274.3,
+          "median_tokens": 7868
+        },
+        "evidence_preload": {
+          "kind": "measured",
+          "seconds_total": 539.3,
+          "seconds_per_ai_file": 59.9,
+          "deep_forensics_done": 9,
+          "deep_forensics_skipped": 0,
+          "note": "capa/floss 等预采集的**逐文件实测**耗时，与模型调用分开计时"
+        },
+        "ai_self_tool_calls": {
+          "kind": "measured",
+          "calls": 1,
+          "files_deep_dive": 1,
+          "note": "送审之后 AI **自己**又调了几次工具（分流档要看这个：跳过的 capa/floss 若被 AI 补回来，分流的收益就没了）"
+        },
+        "wall_clock_s": 331.7,
+        "wall_s_per_ai_file": 36.9,
+        "wall_s_per_corpus_file": 1.037
+      },
+      "verification": {
+        "from_cache": 0,
+        "file_errors": 0,
+        "error_files": []
+      }
+    },
+    {
+      "label": "g100",
+      "gate": 100,
+      "config": {
+        "ai_threshold": 100,
+        "deep_evidence_threshold": 0,
+        "extra_args": "",
+        "workers": 6,
+        "cache": "AI_AV_CACHE=0（关缓存，保证每档真跑）",
+        "state_dir": "/tmp/thr-sweep/state-g100（每档独立，空缓存）"
+      },
+      "kind": "measured",
+      "files_scanned": 319,
+      "routed_to_ai": 105,
+      "routed_declared_send_ai": 1,
+      "send_rate": 0.3281,
+      "send_rate_cli": 0.3197,
+      "send_rate_denominator_note": "脚本口径分母 = 语料 320 个；CLI 口径分母 = 实际扫到的 319 个（1 个 114.8MB 大文件被 50MB 上限挡掉）",
+      "cli_ledger": {
+        "kind": "measured",
+        "send_rate": 0.3197,
+        "sent": 102,
+        "closed_malicious": 17,
+        "closed_clean": 28,
+        "closed_rate": 0.1411,
+        "unresolved": 273,
+        "unclassified_signals": 0,
+        "unavailable_detections": [
+          "VirusTotal —— 未配置 API Key（拿不到外部多引擎票数）"
+        ],
+        "tokens": 1029353,
+        "requests": 102,
+        "files_charged": 102,
+        "files_skipped_by_budget": 0,
+        "files_degraded": 3,
+        "files_with_retry": 3,
+        "errors": 3,
+        "scan_skips": {
+          "total": 1,
+          "by_reason": {
+            "too_large": 1
+          },
+          "max_size_mb": 50,
+          "include_system": false
+        }
+      },
+      "ai_used": 102,
+      "ai_degraded_to_rules": 3,
+      "degraded_files": [
+        "/tmp/real-dist-320/files/benign/VirtualSurroundApo.dll",
+        "/tmp/real-dist-320/files/benign/rpchttp.dll",
+        "/tmp/real-dist-320/files/benign/MSAlacEncoder.dll"
+      ],
+      "ai_verdict_dist": {
+        "malicious": 1,
+        "suspicious": 3,
+        "clean": 98
+      },
+      "recall_layer1": 1.0,
+      "recall_layer1_hits": 20,
+      "recall_ai": 1.0,
+      "recall_ai_hits": 20,
+      "recall_delta_vs_layer1": 0.0,
+      "n_malicious": 20,
+      "still_missed_malicious": [],
+      "ai_delta": {
+        "kind": "measured",
+        "malicious_flagged_by_ai": [
+          "/tmp/real-dist-320/files/malware/08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe",
+          "/tmp/real-dist-320/files/malware/11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe",
+          "/tmp/real-dist-320/files/malware/06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe"
+        ],
+        "malicious_flagged_suspicious": [
+          "/tmp/real-dist-320/files/malware/08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe",
+          "/tmp/real-dist-320/files/malware/06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe"
+        ],
+        "benign_false_flags": [
+          "/tmp/real-dist-320/files/benign/odbccr32.dll"
+        ],
+        "net_flagged_files": 2
+      },
+      "cost": {
+        "ai_judgement": {
+          "kind": "measured",
+          "tokens": 1029353,
+          "cny": 8.2348,
+          "tokens_per_ai_file": 10091.7,
+          "tokens_per_corpus_file": 3216.7,
+          "median_tokens": 8699
+        },
+        "evidence_preload": {
+          "kind": "measured",
+          "seconds_total": 6785.6,
+          "seconds_per_ai_file": 66.5,
+          "deep_forensics_done": 102,
+          "deep_forensics_skipped": 0,
+          "note": "capa/floss 等预采集的**逐文件实测**耗时，与模型调用分开计时"
+        },
+        "ai_self_tool_calls": {
+          "kind": "measured",
+          "calls": 0,
+          "files_deep_dive": 0,
+          "note": "送审之后 AI **自己**又调了几次工具（分流档要看这个：跳过的 capa/floss 若被 AI 补回来，分流的收益就没了）"
+        },
+        "wall_clock_s": 1832.9,
+        "wall_s_per_ai_file": 18.0,
+        "wall_s_per_corpus_file": 5.728
+      },
+      "verification": {
+        "from_cache": 0,
+        "file_errors": 3,
+        "error_files": [
+          "/tmp/real-dist-320/files/benign/VirtualSurroundApo.dll",
+          "/tmp/real-dist-320/files/benign/rpchttp.dll",
+          "/tmp/real-dist-320/files/benign/MSAlacEncoder.dll"
+        ]
+      }
+    },
+    {
+      "label": "g100-deep300",
+      "gate": 100,
+      "config": {
+        "ai_threshold": 100,
+        "deep_evidence_threshold": 300,
+        "extra_args": "--deep-evidence-threshold 300",
+        "workers": 6,
+        "cache": "AI_AV_CACHE=0（关缓存，保证每档真跑）",
+        "state_dir": "/tmp/thr-sweep/state-g100-deep300（每档独立，空缓存）"
+      },
+      "kind": "measured",
+      "files_scanned": 319,
+      "routed_to_ai": 105,
+      "routed_declared_send_ai": 1,
+      "send_rate": 0.3281,
+      "send_rate_cli": 0.3292,
+      "send_rate_denominator_note": "脚本口径分母 = 语料 320 个；CLI 口径分母 = 实际扫到的 319 个（1 个 114.8MB 大文件被 50MB 上限挡掉）",
+      "cli_ledger": {
+        "kind": "measured",
+        "send_rate": 0.3292,
+        "sent": 105,
+        "closed_malicious": 17,
+        "closed_clean": 28,
+        "closed_rate": 0.1411,
+        "unresolved": 273,
+        "unclassified_signals": 0,
+        "unavailable_detections": [
+          "VirusTotal —— 未配置 API Key（拿不到外部多引擎票数）"
+        ],
+        "tokens": 841945,
+        "requests": 105,
+        "files_charged": 105,
+        "files_skipped_by_budget": 0,
+        "files_degraded": 0,
+        "files_with_retry": 0,
+        "errors": 0,
+        "scan_skips": {
+          "total": 1,
+          "by_reason": {
+            "too_large": 1
+          },
+          "max_size_mb": 50,
+          "include_system": false
+        }
+      },
+      "ai_used": 105,
+      "ai_degraded_to_rules": 0,
+      "degraded_files": [],
+      "ai_verdict_dist": {
+        "malicious": 0,
+        "suspicious": 3,
+        "clean": 102
+      },
+      "recall_layer1": 1.0,
+      "recall_layer1_hits": 20,
+      "recall_ai": 1.0,
+      "recall_ai_hits": 20,
+      "recall_delta_vs_layer1": 0.0,
+      "n_malicious": 20,
+      "still_missed_malicious": [],
+      "ai_delta": {
+        "kind": "measured",
+        "malicious_flagged_by_ai": [
+          "/tmp/real-dist-320/files/malware/08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe",
+          "/tmp/real-dist-320/files/malware/11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe",
+          "/tmp/real-dist-320/files/malware/06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe"
+        ],
+        "malicious_flagged_suspicious": [
+          "/tmp/real-dist-320/files/malware/08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe",
+          "/tmp/real-dist-320/files/malware/11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe",
+          "/tmp/real-dist-320/files/malware/06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe"
+        ],
+        "benign_false_flags": [],
+        "net_flagged_files": 3
+      },
+      "cost": {
+        "ai_judgement": {
+          "kind": "measured",
+          "tokens": 841945,
+          "cny": 6.7356,
+          "tokens_per_ai_file": 8018.5,
+          "tokens_per_corpus_file": 2631.1,
+          "median_tokens": 7246
+        },
+        "evidence_preload": {
+          "kind": "measured",
+          "seconds_total": 19.5,
+          "seconds_per_ai_file": 0.2,
+          "deep_forensics_done": 1,
+          "deep_forensics_skipped": 104,
+          "note": "capa/floss 等预采集的**逐文件实测**耗时，与模型调用分开计时"
+        },
+        "ai_self_tool_calls": {
+          "kind": "measured",
+          "calls": 0,
+          "files_deep_dive": 0,
+          "note": "送审之后 AI **自己**又调了几次工具（分流档要看这个：跳过的 capa/floss 若被 AI 补回来，分流的收益就没了）"
+        },
+        "wall_clock_s": 555.2,
+        "wall_s_per_ai_file": 5.3,
+        "wall_s_per_corpus_file": 1.735
+      },
+      "verification": {
+        "from_cache": 0,
+        "file_errors": 0,
+        "error_files": []
+      }
+    },
+    {
+      "label": "g50",
+      "gate": 50,
+      "config": {
+        "ai_threshold": 50,
+        "deep_evidence_threshold": 0,
+        "extra_args": "",
+        "workers": 6,
+        "cache": "AI_AV_CACHE=0（关缓存，保证每档真跑）",
+        "state_dir": "/tmp/thr-sweep/state-g50（每档独立，空缓存）"
+      },
+      "kind": "measured",
+      "files_scanned": 319,
+      "routed_to_ai": 106,
+      "routed_declared_send_ai": 1,
+      "send_rate": 0.3312,
+      "send_rate_cli": 0.3323,
+      "send_rate_denominator_note": "脚本口径分母 = 语料 320 个；CLI 口径分母 = 实际扫到的 319 个（1 个 114.8MB 大文件被 50MB 上限挡掉）",
+      "cli_ledger": {
+        "kind": "measured",
+        "send_rate": 0.3323,
+        "sent": 106,
+        "closed_malicious": 17,
+        "closed_clean": 28,
+        "closed_rate": 0.1411,
+        "unresolved": 273,
+        "unclassified_signals": 0,
+        "unavailable_detections": [
+          "VirusTotal —— 未配置 API Key（拿不到外部多引擎票数）"
+        ],
+        "tokens": 1011957,
+        "requests": 106,
+        "files_charged": 106,
+        "files_skipped_by_budget": 0,
+        "files_degraded": 0,
+        "files_with_retry": 0,
+        "errors": 0,
+        "scan_skips": {
+          "total": 1,
+          "by_reason": {
+            "too_large": 1
+          },
+          "max_size_mb": 50,
+          "include_system": false
+        }
+      },
+      "ai_used": 106,
+      "ai_degraded_to_rules": 0,
+      "degraded_files": [],
+      "ai_verdict_dist": {
+        "malicious": 1,
+        "suspicious": 2,
+        "clean": 103
+      },
+      "recall_layer1": 1.0,
+      "recall_layer1_hits": 20,
+      "recall_ai": 1.0,
+      "recall_ai_hits": 20,
+      "recall_delta_vs_layer1": 0.0,
+      "n_malicious": 20,
+      "still_missed_malicious": [],
+      "ai_delta": {
+        "kind": "measured",
+        "malicious_flagged_by_ai": [
+          "/tmp/real-dist-320/files/malware/08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe",
+          "/tmp/real-dist-320/files/malware/11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe",
+          "/tmp/real-dist-320/files/malware/06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe"
+        ],
+        "malicious_flagged_suspicious": [
+          "/tmp/real-dist-320/files/malware/11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe",
+          "/tmp/real-dist-320/files/malware/06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe"
+        ],
+        "benign_false_flags": [],
+        "net_flagged_files": 3
+      },
+      "cost": {
+        "ai_judgement": {
+          "kind": "measured",
+          "tokens": 1011957,
+          "cny": 8.0957,
+          "tokens_per_ai_file": 9546.8,
+          "tokens_per_corpus_file": 3162.4,
+          "median_tokens": 8522
+        },
+        "evidence_preload": {
+          "kind": "measured",
+          "seconds_total": 6804.1,
+          "seconds_per_ai_file": 64.2,
+          "deep_forensics_done": 106,
+          "deep_forensics_skipped": 0,
+          "note": "capa/floss 等预采集的**逐文件实测**耗时，与模型调用分开计时"
+        },
+        "ai_self_tool_calls": {
+          "kind": "measured",
+          "calls": 3,
+          "files_deep_dive": 3,
+          "note": "送审之后 AI **自己**又调了几次工具（分流档要看这个：跳过的 capa/floss 若被 AI 补回来，分流的收益就没了）"
+        },
+        "wall_clock_s": 1821.9,
+        "wall_s_per_ai_file": 17.2,
+        "wall_s_per_corpus_file": 5.693
+      },
+      "verification": {
+        "from_cache": 0,
+        "file_errors": 0,
+        "error_files": []
+      }
+    }
+  ],
+  "tier_0": {
+    "label": "g0",
+    "gate": 0,
+    "kind": "sampled+extrapolated",
+    "full_run_reference": {
+      "kind": "measured",
+      "scope": "full-run（历史那一轮，本轮没有再调模型）",
+      "files_scanned": 319,
+      "routed_to_ai": 274,
+      "send_rate": 0.8562,
+      "ai_used": 273,
+      "ai_degraded_to_rules": 1,
+      "ai_verdict_dist": {
+        "malicious": 1,
+        "suspicious": 2,
+        "clean": 270
+      },
+      "recall_layer1": 1.0,
+      "recall_ai": 1.0,
+      "n_malicious": 20,
+      "ai_delta": {
+        "kind": "measured",
+        "malicious_flagged_by_ai": [
+          "/tmp/real-dist-320/files/malware/08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe",
+          "/tmp/real-dist-320/files/malware/11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe",
+          "/tmp/real-dist-320/files/malware/06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe"
+        ],
+        "malicious_flagged_suspicious": [
+          "/tmp/real-dist-320/files/malware/11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe",
+          "/tmp/real-dist-320/files/malware/06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe"
+        ],
+        "benign_false_flags": []
+      },
+      "cost": {
+        "ai_judgement": {
+          "kind": "measured",
+          "tokens": 2195054,
+          "cny": 17.5604,
+          "tokens_per_ai_file": 8040.5,
+          "tokens_per_corpus_file": 6859.5
+        },
+        "evidence_preload": {
+          "kind": "measured",
+          "seconds_total": 8894.1,
+          "seconds_per_ai_file": 32.6
+        }
+      }
+    },
+    "sampling": {
+      "kind": "extrapolated",
+      "method": {
+        "stratified_by": "类别 × 来源池（按各层占比分配名额，最大余数法）",
+        "seed": 20260927,
+        "n": 48,
+        "order": "层内按文件名排序后 random.Random(seed).sample（可复现）"
+      },
+      "sample_measured": {
+        "kind": "measured",
+        "scope": "sample",
+        "files_drawn": 48,
+        "files_reaching_ai": 40,
+        "files_short_circuited": 7,
+        "files_degraded_to_rules": 1,
+        "tokens_measured": 321106,
+        "mean_tokens_per_ai_file": 8027.6,
+        "median_tokens_per_ai_file": 7020.5,
+        "mean_preload_ms_per_ai_file": 29720.5,
+        "mean_cny_per_ai_file": 0.0642,
+        "wall_clock_s_per_ai_file_amortized": 9.01,
+        "by_label": {
+          "benign": {
+            "drawn": 45,
+            "reached_ai": 39,
+            "tokens_mean": 8057.3
+          },
+          "malicious": {
+            "drawn": 3,
+            "reached_ai": 1,
+            "tokens_mean": 6872.0
+          }
+        },
+        "note": "抽样文件在**已跑过的那一轮**里的逐文件实测值；本轮没有再调模型"
+      },
+      "basis": "分层 48 抽样实测均值 8027.6 token/文件（seed=20260927，与语料同为 6.25% 恶意）",
+      "extrapolated": {
+        "same_scope_x_routed": {
+          "scale": 274,
+          "tokens": 2199562,
+          "cny": 17.6
+        },
+        "upper_bound_x_corpus": {
+          "scale": 320,
+          "tokens": 2568832,
+          "cny": 20.55
+        }
+      },
+      "note": "0 档按纪律**不全量重跑**：用上一轮那套分层抽样 + 外推（0 token）；上面 full_run_reference 是历史全量实测，用来核抽样代表性"
+    }
+  },
+  "deep_evidence_control": {
+    "question": "同一个闸门下，把深度取证（capa/floss）限制在高分文件上，总时间/送审率/召回 各变多少？",
+    "why": "capa 4.9~7.5s + floss 8.3~8.7s ≈ 14~16s/文件，且与文件大小强相关（24MB 的 edgehtml.dll / 18MB 的 mspdf.dll）；闸门调低后送审文件变多，取证时间会盖过模型时间。",
+    "control_variable": "只有 --deep-evidence-threshold 一个：0 = 全部深挖；>0 = 预筛分数低于它的文件只采轻量证据（PE 头/导入表/明文字符串/签名）",
+    "pairs": [
+      {
+        "gate": 200,
+        "kind": "measured",
+        "deep_all_arm": {
+          "label": "g200",
+          "deep_evidence_threshold": 0,
+          "wall_s": 328.3,
+          "routed_to_ai": 8,
+          "send_rate": 0.025,
+          "recall_layer1": 0.95,
+          "recall_ai": 0.95,
+          "ai_verdict_dist": {
+            "malicious": 1,
+            "suspicious": 1,
+            "clean": 6
+          },
+          "tokens": 72509,
+          "preload_s": 516.8,
+          "preload_s_per_ai_file": 64.6,
+          "deep_done": 8,
+          "deep_skipped": 0,
+          "ai_self_tool_calls": 0,
+          "ai_degraded_to_rules": 0
+        },
+        "deep_gated_arm": {
+          "label": "g200-deep300",
+          "deep_evidence_threshold": 300,
+          "wall_s": 155.8,
+          "routed_to_ai": 8,
+          "send_rate": 0.025,
+          "recall_layer1": 0.95,
+          "recall_ai": 0.95,
+          "ai_verdict_dist": {
+            "malicious": 0,
+            "suspicious": 2,
+            "clean": 6
+          },
+          "tokens": 61535,
+          "preload_s": 7.0,
+          "preload_s_per_ai_file": 0.9,
+          "deep_done": 1,
+          "deep_skipped": 7,
+          "ai_self_tool_calls": 0,
+          "ai_degraded_to_rules": 0
+        },
+        "delta": {
+          "kind": "derived",
+          "wall_s": -172.5,
+          "wall_pct": -52.5,
+          "send_rate": 0.0,
+          "recall_layer1": 0.0,
+          "recall_ai": 0.0,
+          "tokens": -10974,
+          "preload_s": -509.8
+        },
+        "same_file_verdict_diff": {
+          "kind": "measured",
+          "common_ai_files": 8,
+          "risk_agreement": 0.875,
+          "changes": [
+            {
+              "file": "11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe",
+              "deep_all": "malicious",
+              "deep_gated": "suspicious",
+              "score": 275,
+              "size": 442368,
+              "deep_forensics_in_gated_arm": "skipped"
+            }
+          ]
+        }
+      },
+      {
+        "gate": 100,
+        "kind": "measured",
+        "deep_all_arm": {
+          "label": "g100",
+          "deep_evidence_threshold": 0,
+          "wall_s": 1832.9,
+          "routed_to_ai": 105,
+          "send_rate": 0.3281,
+          "recall_layer1": 1.0,
+          "recall_ai": 1.0,
+          "ai_verdict_dist": {
+            "malicious": 1,
+            "suspicious": 3,
+            "clean": 98
+          },
+          "tokens": 1029353,
+          "preload_s": 6785.6,
+          "preload_s_per_ai_file": 66.5,
+          "deep_done": 102,
+          "deep_skipped": 0,
+          "ai_self_tool_calls": 0,
+          "ai_degraded_to_rules": 3
+        },
+        "deep_gated_arm": {
+          "label": "g100-deep300",
+          "deep_evidence_threshold": 300,
+          "wall_s": 555.2,
+          "routed_to_ai": 105,
+          "send_rate": 0.3281,
+          "recall_layer1": 1.0,
+          "recall_ai": 1.0,
+          "ai_verdict_dist": {
+            "malicious": 0,
+            "suspicious": 3,
+            "clean": 102
+          },
+          "tokens": 841945,
+          "preload_s": 19.5,
+          "preload_s_per_ai_file": 0.2,
+          "deep_done": 1,
+          "deep_skipped": 104,
+          "ai_self_tool_calls": 0,
+          "ai_degraded_to_rules": 0
+        },
+        "delta": {
+          "kind": "derived",
+          "wall_s": -1277.7,
+          "wall_pct": -69.7,
+          "send_rate": 0.0,
+          "recall_layer1": 0.0,
+          "recall_ai": 0.0,
+          "tokens": -187408,
+          "preload_s": -6766.1
+        },
+        "same_file_verdict_diff": {
+          "kind": "measured",
+          "common_ai_files": 102,
+          "risk_agreement": 0.9804,
+          "changes": [
+            {
+              "file": "odbccr32.dll",
+              "deep_all": "suspicious",
+              "deep_gated": "clean",
+              "score": 125,
+              "size": 106496,
+              "deep_forensics_in_gated_arm": "skipped"
+            },
+            {
+              "file": "11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe",
+              "deep_all": "malicious",
+              "deep_gated": "suspicious",
+              "score": 275,
+              "size": 442368,
+              "deep_forensics_in_gated_arm": "skipped"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "consistency": {
+    "same_gate_repeats": [
+      {
+        "pair": [
+          "g200",
+          "g200b"
+        ],
+        "common_ai_files": 8,
+        "risk_agreement": 1.0,
+        "risk_disagreements": [],
+        "tokens_mean_a": 9063.6,
+        "tokens_mean_b": 8964.4
+      }
+    ],
+    "cross_tier_same_file": {
+      "files_in_multiple_tiers": 105,
+      "all_agree": 102,
+      "agreement_rate": 0.9714,
+      "disagreements": [
+        {
+          "file": "08a83ab02f53415009c08e14494e97be69bcccbb491c00a66f2f5cf71ff46619.exe",
+          "observations": [
+            {
+              "tier": "g100",
+              "risk": "suspicious"
+            },
+            {
+              "tier": "g100-deep300",
+              "risk": "suspicious"
+            },
+            {
+              "tier": "g150",
+              "risk": "suspicious"
+            },
+            {
+              "tier": "g200",
+              "risk": "suspicious"
+            },
+            {
+              "tier": "g200-deep300",
+              "risk": "suspicious"
+            },
+            {
+              "tier": "g200b",
+              "risk": "suspicious"
+            },
+            {
+              "tier": "g300",
+              "risk": "suspicious"
+            },
+            {
+              "tier": "g50",
+              "risk": "malicious"
+            }
+          ]
+        },
+        {
+          "file": "11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe",
+          "observations": [
+            {
+              "tier": "g100",
+              "risk": "malicious"
+            },
+            {
+              "tier": "g100-deep300",
+              "risk": "suspicious"
+            },
+            {
+              "tier": "g150",
+              "risk": "suspicious"
+            },
+            {
+              "tier": "g200",
+              "risk": "malicious"
+            },
+            {
+              "tier": "g200-deep300",
+              "risk": "suspicious"
+            },
+            {
+              "tier": "g200b",
+              "risk": "malicious"
+            },
+            {
+              "tier": "g50",
+              "risk": "suspicious"
+            }
+          ]
+        },
+        {
+          "file": "odbccr32.dll",
+          "observations": [
+            {
+              "tier": "g100",
+              "risk": "suspicious"
+            },
+            {
+              "tier": "g100-deep300",
+              "risk": "clean"
+            },
+            {
+              "tier": "g50",
+              "risk": "clean"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "layer1_reference": {
+    "kind": "measured",
+    "gate": 300,
+    "summary": {
+      "total": 320,
+      "send_rate": 0.0031,
+      "sent": 1,
+      "closed_malicious": 17,
+      "closed_clean": 28,
+      "closed_rate": 0.1406,
+      "unresolved": 274,
+      "unresolved_rate": 0.8562,
+      "dispositions": {
+        "pass": 274,
+        "closed_clean": 28,
+        "closed_malicious": 17,
+        "send_ai": 1
+      },
+      "labeled_malicious": 20,
+      "labeled_benign": 300,
+      "recall_layer1": 0.9,
+      "recall_deterministic_only": 0.85,
+      "benign_send_rate": 0.0,
+      "clamav": {
+        "hit_files": 17,
+        "hits": 17,
+        "malware_signature": 17,
+        "heuristic": 0,
+        "pua": 0,
+        "signatures_top": {
+          "Win.Trojan.Tepfer-81": 2,
+          "Win.Packed.Zbot-9758659-0": 1,
+          "Win.Trojan.Smartfortress-7139545-0": 1,
+          "Win.Packed.Zbot-9753617-0": 1,
+          "Win.Trojan.Shiz-1332": 1,
+          "Win.Trojan.Mediyes-1": 1,
+          "Doc.Downloader.Emotet-9778182-0": 1,
+          "Win.Packed.Zbot-9753745-0": 1,
+          "Win.Malware.Zbot-9734844-0": 1,
+          "Win.Trojan.Tepfer-82": 1,
+          "Win.Trojan.Zbot-9757924-0": 1,
+          "Win.Packed.Krucky-10058099-0": 1,
+          "Win.Dropper.Zeus-9940962-0": 1,
+          "Win.Trojan.Generickdz-1187": 1,
+          "Win.Packed.Krucky-6914753-0": 1,
+          "Doc.Downloader.Emotet-9343219-0": 1
+        }
+      },
+      "unclassified_signals": 0,
+      "errors": 0,
+      "criteria_fired": {
+        "HIGH_RISK_EXTENSION": 149,
+        "DET_TRUSTED_SIGNATURE": 28,
+        "STRUCT_TEXT_RATIO": 18,
+        "DET_CLAMAV_SIGNATURE": 17,
+        "STRUCT_RSRC_RATIO": 6,
+        "STRUCT_WX_SECTION": 4,
+        "STRUCT_SPARSE_IMPORTS": 3,
+        "SUSPICIOUS_NAME_WORD": 2,
+        "PACKING": 2,
+        "STRONG_YARA": 2,
+        "CONTAINER_PATTERN": 2,
+        "MACRO_PRESENT": 2,
+        "MACRO_PATTERN": 2,
+        "WEAK_YARA": 1,
+        "STRUCT_EP_NOT_EXECUTABLE": 1
+      },
+      "score_histogram": {
+        "0": 196,
+        "1-299": 106,
+        "300-499": 1,
+        ">=1000": 17
+      }
+    },
+    "elapsed_s": 39.3,
+    "elapsed_s_with_clamav": 112.3,
+    "consistency": {
+      "files": 320,
+      "same": 320,
+      "rate": 1.0
+    },
+    "verification": {
+      "clamav_engine": {
+        "available": true,
+        "exe": "/usr/bin/clamscan",
+        "version": "ClamAV 1.5.4/28135/Sat Sep 26 14:24:13 2026",
+        "engine_version": "1.5.4",
+        "db_version": "28135",
+        "db_date": "Sat Sep 26 14:24:13 2026",
+        "db_files": [
+          {
+            "name": "bytecode.cvd",
+            "bytes": 281702
+          },
+          {
+            "name": "daily.cvd",
+            "bytes": 23434705
+          },
+          {
+            "name": "main.cvd",
+            "bytes": 89072577
+          }
+        ],
+        "error": ""
+      },
+      "clamav_selftest": {
+        "ok": true,
+        "signature": "Eicar-Test-Signature",
+        "scanned": 1,
+        "invocations": 1,
+        "elapsed_s": 6.12,
+        "error": ""
+      },
+      "clamav_unreported_total": 0,
+      "clamav_errors_total": 0,
+      "unclassified_signals_total": 0,
+      "file_errors_total": 0,
+      "ok": true
+    }
+  }
+}
