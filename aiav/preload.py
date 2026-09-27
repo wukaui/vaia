@@ -142,7 +142,10 @@ def deep_evidence_threshold() -> int:
     """分流·取证层阈值：预筛分数 ≥ 它才跑 capa/floss。**默认 0 = 不分流**（全部深挖）。
 
     默认关掉是刻意的：这条会改变检出面的形状，必须由使用者显式开启
-    （`--deep-evidence-threshold 12` 或 `AI_AV_DEEP_EVIDENCE_THRESHOLD=12`）。
+    （`--deep-evidence-threshold 300` 或 `AI_AV_DEEP_EVIDENCE_THRESHOLD=300`）。
+
+    单位是 **Assemblyline 刻度**（2026-09-27 起）：300 = 上游 verdict.suspicious
+    = 老口径的 12。老口径的 12 换算过来就是 300（`criteria.SIGNAL_UNIT = 25`）。
     """
     try:
         return max(0, int(os.getenv("AI_AV_DEEP_EVIDENCE_THRESHOLD", "0")))

@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from aiav.criteria import AI_GATE
 from aiav.models import FileReport, RiskLevel
 
 RISK_COLOR = {
@@ -19,13 +20,17 @@ RISK_ORDER = {RiskLevel.clean: 0, RiskLevel.suspicious: 1, RiskLevel.malicious: 
 
 
 def _band(score: int) -> str:
+    """分数档位。**Assemblyline 刻度**（2026-09-27 换）：一条弱信号 125 分起，
+    两条才够 300（送审闸门），500-999 是强可疑，≥1000 是确定性结案。"""
     if score == 0:
         return "0"
-    if score <= 4:
-        return "1-4"
-    if score <= 11:
-        return "5-11"
-    return ">=12"
+    if score < 300:
+        return "1-299"
+    if score < 500:
+        return "300-499"
+    if score < 1000:
+        return "500-999"
+    return ">=1000"
 
 
 def build_summary(reports: list[FileReport]) -> dict[str, Any]:
@@ -104,15 +109,49 @@ def build_summary(reports: list[FileReport]) -> dict[str, Any]:
         "category": _dimension(lambda r: r.verdict.category or "unknown"),
     }
 
+    # ---- ①层账本（2026-09-27）：产品的三个命数 ----
+    #   送审率       = 真正交给 AI 的文件占比（旧架构是 100%）
+    #   纯①层结案率  = 不送 AI 就把结论定下来的比例（确定性判恶意 + 确定性判干净）
+    #   未结案率     = 没线索、不送 AI、也没结论（⚠️ 不是判白）
+    n = len(reports) or 1
+    dispositions = Counter((r.deterministic or {}).get("disposition") or "unknown" for r in reports)
+    sent = sum(1 for r in reports if r.agent_used)
+    unclassified = [r for r in reports if r.unclassified_signals]
+    criteria_fired = Counter(
+        h.get("heur_id", "?") for r in reports for h in (r.criteria_hits or []) if h.get("score")
+    )
+    criteria_zeroed = Counter(
+        h.get("heur_id", "?") for r in reports for h in (r.criteria_hits or [])
+        if h.get("safelisted")
+    )
+
     return {
         "total": len(reports),
         "errors": sum(1 for r in reports if r.error),
+        "deterministic": {
+            "gate": AI_GATE,
+            "send_rate": round(sent / n, 4),
+            "sent": sent,
+            "closed_malicious": dispositions.get("closed_malicious", 0),
+            "closed_clean": dispositions.get("closed_clean", 0),
+            "closed_rate": round(
+                (dispositions.get("closed_malicious", 0) + dispositions.get("closed_clean", 0)) / n, 4),
+            "unresolved": dispositions.get("pass", 0),
+            "unresolved_rate": round(dispositions.get("pass", 0) / n, 4),
+            "dispositions": dict(dispositions),
+            "criteria_fired": dict(criteria_fired.most_common(20)),
+            "criteria_safelisted": dict(criteria_zeroed),
+            # 核验铁律：这个数**必须为 0**。不为 0 说明有信号加了分却没进判据表。
+            "files_with_unclassified_signals": len(unclassified),
+            "unclassified_signals": sorted({s for r in reports for s in (r.unclassified_signals or [])})[:10],
+        },
         "dimensions": dimensions,
         "risk": {k: risk.get(k, 0) for k in ("clean", "suspicious", "malicious")},
         "agent_used": sum(1 for r in reports if r.agent_used),
         "by_extension": dict(ext.most_common(12)),
         "by_category": dict(category.most_common(10)),
-        "by_score_band": {b: band.get(b, 0) for b in ("0", "1-4", "5-11", ">=12")},
+        "by_score_band": {b: band.get(b, 0) for b in
+                          ("0", "1-299", "300-499", "500-999", ">=1000")},
         "yara_top": dict(yara.most_common(8)),
         "disposition": {k: disp.get(k, 0) for k in
                         ("none", "whitelisted", "quarantined", "quarantine_planned",
@@ -261,6 +300,9 @@ def write_reports(reports: list[FileReport], output_dir: Path,
             "preloaded_files": summary["preload"]["files_preloaded"],
         },
         "aggregate": summary,
+        # Assemblyline 形状的证据链（2026-09-27）：判据 / 依据 / 证据段 / 服务 / 血缘。
+        # 结构由**抄来的上游 `Result` 模型**校验过，校验不过会在这里抛出来（不静默）。
+        "assemblyline": _assemblyline_payload(reports),
         # 逐文件溯源统计：报告正文里每条结论能不能对回工具输出，这里给出可核对的计数
         "attribution_by_file": {
             str(r.path): attribution_stats(r) for r in reports
@@ -282,6 +324,42 @@ def write_reports(reports: list[FileReport], output_dir: Path,
     audit_path.write_text(json.dumps(audit_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     html_path.write_text(_render_html(reports, summary), encoding="utf-8")
     return json_path, html_path, audit_path
+
+
+def _assemblyline_payload(reports: list[FileReport]) -> dict[str, Any]:
+    """Assemblyline 形状的那一份（提交级 + 逐文件），并**用上游模型校验**。
+
+    校验失败不让扫描挂掉，但要在报告里留下 `schema_errors` —— 静默降级是核验铁律里
+    明令禁止的（"看 not installed / error / 静默降级计数，不为 0 则该批数字直接作废"）。
+    """
+    from aiav.assemblyline_view import build_submission, criteria_catalog, validate_result
+
+    stats = load_criteria_stats()
+    submission = build_submission(reports, stats=stats)
+    schema_errors: list[str] = []
+    for item in submission["results"]:
+        try:
+            validate_result(item)
+        except Exception as exc:  # noqa: BLE001
+            schema_errors.append(f"{item.get('sha256', '?')[:16]}: {type(exc).__name__}: {exc}")
+    return {
+        "upstream": "CybercentreCanada/assemblyline",
+        "upstream_version": "4.7.4.20",
+        "licence": "MIT",
+        "criteria_catalog": criteria_catalog(),
+        "criteria_stats": stats,
+        "schema_errors": schema_errors,
+        "submission": submission,
+    }
+
+
+def load_criteria_stats() -> dict[str, Any]:
+    try:
+        from aiav.criteria import load_stats
+
+        return load_stats()
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 SUPPORTED_SUPPORT = ("explicit", "overlap")
@@ -576,6 +654,28 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
 
     rows = "".join(_file_row(r, i) for i, r in enumerate(reports))
 
+    from aiav.assemblyline_view import criteria_catalog
+
+    catalog = criteria_catalog()
+    catalog_html = (
+        "<table><thead><tr><th>判据 ID</th><th>名字</th><th>分</th><th>上限</th>"
+        "<th>适用类型</th><th>产出工具</th><th>ATT&amp;CK</th><th>档位</th></tr></thead><tbody>"
+        + "".join(
+            "<tr>"
+            f"<td><code>{_esc(c['heur_id'])}</code></td>"
+            f"<td>{_esc(c['name'])}<div class='meta'>{_esc(c['description'][:160])}</div></td>"
+            f"<td>{c['score']}</td>"
+            f"<td>{'' if c['max_score'] is None else c['max_score']}</td>"
+            f"<td>{_esc(c['filetype'])}</td>"
+            f"<td>{_esc(c['produced_by'])}</td>"
+            f"<td>{_esc('、'.join(a['attack_id'] + ' ' + (a.get('name') or '') for a in c['attack']) or '-')}</td>"
+            f"<td>{'确定性结案' if c['conclusive'] else ('强可疑' if c['score'] >= 500 else '弱信号')}"
+            f"{'（判干净）' if c['direction'] == 'clean' else ''}</td>"
+            "</tr>"
+            for c in catalog)
+        + "</tbody></table>"
+    )
+
     warnings_block = ""
     if summary["top_warnings"]:
         warnings_block = _details(
@@ -647,6 +747,23 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
     pack_table = {"检出加壳": summary["packing"]["packed"],
                   "成功脱壳": summary["packing"]["unpacked_ok"]}
 
+    # ---- ①层账本（2026-09-27）----
+    det = summary["deterministic"]
+    det_note = (
+        "<div class='meta'>①层（确定性）闸门 <b>" + str(det["gate"]) + "</b> 分"
+        "（Assemblyline 刻度，= 上游 verdict.suspicious）。"
+        f"送审率 <b>{det['send_rate']*100:.1f}%</b>（{det['sent']}/{total}）· "
+        f"纯①层结案 <b>{det['closed_rate']*100:.1f}%</b>"
+        f"（判恶意 {det['closed_malicious']} + 判干净 {det['closed_clean']}）· "
+        f"未结案 <b>{det['unresolved']}</b>（<b>未结案 ≠ 判白</b>，只是没线索、不值得花 token）。"
+        + (f" <b class='error'>⚠ {det['files_with_unclassified_signals']} 个文件有未分类信号："
+           f"{_esc('、'.join(det['unclassified_signals']))} —— 有信号加了分却没进判据表，"
+           "这批数字按核验铁律作废。</b>" if det["files_with_unclassified_signals"] else "")
+        + "</div>")
+    det_table = "".join(
+        f"<tr><td><code>{_esc(k)}</code></td><td>{_esc(v)}</td></tr>"
+        for k, v in sorted(det["criteria_fired"].items(), key=lambda kv: -kv[1]))
+
     def _options(rows: list[dict[str, Any]]) -> str:
         return "".join(f"<option value='{_esc(r['value'])}'>{_esc(r['value'])}（{r['count']}）</option>"
                        for r in rows)
@@ -716,7 +833,13 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
     {_card("降级到规则", summary["retry"]["files_degraded"], "#c62828")}
     {_card("走深挖路径", summary["usage"]["files_deep_dive"], "#1565c0")}
     {_card("纯读预采集证据", summary["usage"]["files_no_tool_call"], "#2e7d32")}
+    {_card("送审率", f"{det['send_rate']*100:.1f}%", "#c62828")}
+    {_card("①层结案率", f"{det['closed_rate']*100:.1f}%", "#2e7d32")}
+    {_card("确定性判恶意", det["closed_malicious"], "#c62828")}
+    {_card("确定性判干净", det["closed_clean"], "#2e7d32")}
+    {_card("未结案（≠判白）", det["unresolved"], "#ef6c00")}
   </div>
+  {det_note}
   {sampling_note}
   {retry_note}
   {usage_note}
@@ -739,6 +862,13 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
             + _kv_table("加壳处理", pack_table)
             + _kv_table("载荷判定", summary["packing"]["payload_verdicts"]) + "</div>"
             + "</div>")}
+
+  <h2>①层判据表（照 Assemblyline 三档语义）</h2>
+  <div class="meta">判据表就是代码里的那张表（<code>aiav/criteria.py</code>），
+  报告里原样列出来 —— 每条判据的名字 / 分数 / 上限 / 适用类型 / 产出工具 / ATT&amp;CK
+  都能当场核对，不是"总分多少、来源不明"。</div>
+  {_details("本批判据命中计数", "<table class='mini'>" + det_table + "</table>")}
+  {_details("判据全表（" + str(len(catalog)) + " 条）", catalog_html)}
 
   <h2>逐文件结果</h2>
   <div class="toolbar">

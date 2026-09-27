@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------------------
+# 抄自 Assemblyline（CybercentreCanada/assemblyline），MIT License。
+# 上游版本：4.7.4.20
+# 上游路径：assemblyline/common/path.py
+# 本文件除 import 路径改写外与上游一致；改写记录见 ../VENDOR.json。
+# 完整许可证原文见 ../LICENCE.md。请勿手工编辑本文件 —— 用 scripts/vendor_assemblyline.py 重新生成。
+# ---------------------------------------------------------------------------
+from __future__ import annotations
+import os
+import sys
+from typing import Optional
+
+
+def modulepath(modulename: str) -> str:
+    m = sys.modules[modulename]
+    f = getattr(m, '__file__', None)
+    if not f:
+        return os.path.abspath(os.getcwd())
+    return os.path.dirname(os.path.abspath(f))
+
+
+def splitpath(path: str, sep: Optional[str] = None) -> list:
+    """ Split the path into a list of items """
+    return list(filter(len, path.split(sep or os.path.sep)))
+
+
+def strip_path_inclusion(path: str, base: str) -> str:
+    """Verifies that the provided path is safe with the desired base folder destination.
+
+    If the full path is safe, and no path traversal/inclusion are detected, the full path is
+    returned. If the path is not deemed safe, a simple base filename will be return.
+    In both case, an os.path.join between the desired folder and what gets return should be
+    safe to write to.
+
+    Args:
+        path: The path that needs safety validation.
+        base: The desired destination folder.
+
+    Returns:
+        A safe full path, or only the file basename if unsafe.
+    """
+    path = path.replace("\\", os.path.sep).replace("/", os.path.sep)
+    safe_base = base if base.endswith(os.path.sep) else base + os.path.sep
+    resolved = os.path.abspath(os.path.join(base, path))
+    return path if (resolved == base.rstrip(os.path.sep) or resolved.startswith(safe_base)) else os.path.basename(path)
+
+
+ASCII_NUMBERS = list(range(48, 58))
+ASCII_UPPER_CASE_LETTERS = list(range(65, 91))
+ASCII_LOWER_CASE_LETTERS = list(range(97, 123))
+ASCII_OTHER = [45, 46, 92]  # "-", ".", and "\"
+
+# Create a set that contains all of the valid characters that
+# are allowed to appear in a Unified Naming Convention (UNC) path.
+VALID_UNC_CHARS = [chr(x) for x in ASCII_LOWER_CASE_LETTERS +
+                   ASCII_UPPER_CASE_LETTERS + ASCII_NUMBERS + ASCII_OTHER]
+
+
+def is_unc_legal(path: str) -> bool:
+    """Determine whether or not a given string representing a Windows file path is legal
+    or not as per the Unified Naming Convention (UNC) specifications."""
+    if not path:
+        return False
+
+    return all(char in VALID_UNC_CHARS for char in path)

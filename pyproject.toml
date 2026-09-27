@@ -30,6 +30,14 @@ dependencies = [
     # 静态分析工具，必装（规则集/签名集另跑 `aiav capa-setup`）
     "flare-capa>=9.4",
     "flare-floss>=3.1",
+    # 抄来的 Assemblyline ODM 核心（aiav/assemblyline_core/，MIT）。
+    # 上游 ODM 是自研模型、不是 pydantic，实际只用到这三个：
+    #   arrow / python-dateutil —— odm/base.py 的 Date 字段解析
+    #   python-baseconv         —— _compat/uid.py 的 base62 编码
+    # PyYAML 不在这里列：capa 已经带进来了，classification.yml 用它加载。
+    "arrow>=1.3",
+    "python-dateutil>=2.9",
+    "python-baseconv>=1.2",
 ]
 
 [project.optional-dependencies]

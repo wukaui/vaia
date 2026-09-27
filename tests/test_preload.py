@@ -466,7 +466,11 @@ def test_deep_evidence_threshold_env(monkeypatch):
 
 
 def test_report_summary_and_html_show_deep_skip(tmp_path, monkeypatch, fake_tools):
-    """报告里必须看得见"跳过深度取证" —— 否则读报告的人会把"没报注入能力"读成"查过了没有"。"""
+    """报告里必须看得见"跳过深度取证" —— 否则读报告的人会把"没报注入能力"读成"查过了没有"。
+
+    阈值单位是 **Assemblyline 刻度**（2026-09-27 换的）：300 = 老口径的 12。
+    这个假 PE 只靠"高风险扩展名"拿到 125，所以 300 会把它分到轻量档。
+    """
     from aiav import scanner
     from aiav.report import build_summary, write_reports
 
@@ -482,7 +486,7 @@ def test_report_summary_and_html_show_deep_skip(tmp_path, monkeypatch, fake_tool
     monkeypatch.setattr(scanner, "analyze_file_with_agent", fake_analyze)
     report = scanner.scan_file(p, agent=object(), ai_threshold=0, store=None,
                                allow_unpack=False, allow_archives=False, cache=None,
-                               deep_evidence_threshold=12)
+                               deep_evidence_threshold=300)
 
     assert report.evidence_preload["deep_forensics"] == "skipped"
     assert "capa_scan" not in report.evidence_preload["tools"]

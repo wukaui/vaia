@@ -63,11 +63,18 @@ def scan(
     no_ai: bool = typer.Option(False, "--no-ai", help="只用规则扫描，不调用 LLM"),
     max_size_mb: int = typer.Option(50, "--max-size-mb", help="跳过超过该大小的文件"),
     include_system: bool = typer.Option(False, "--include-system", help="不跳过 Windows/Program Files 等目录"),
-    ai_threshold: int = typer.Option(5, "--ai-threshold", help="预筛分数达到多少才调用 Agent"),
+    ai_threshold: int = typer.Option(
+        300,
+        "--ai-threshold",
+        help="①层判据分数达到多少才把文件交给 AI（Assemblyline 刻度）。"
+             "默认 300 = 上游 verdict.suspicious = 老口径的 12（两条弱信号才过线）。"
+             "调到 0 会退回旧行为：每个文件都送审。",
+    ),
     deep_evidence_threshold: int = typer.Option(
         0, "--deep-evidence-threshold",
         help="分流·取证层：预筛分数低于它的文件只采轻量证据（PE 头/导入表/明文字符串/签名），"
-             "不跑 capa/floss。0=不分流（全部深挖）"),
+             "不跑 capa/floss。0=不分流（全部深挖）。单位是 Assemblyline 刻度，"
+             "300 = 老口径的 12"),
     model: str | None = typer.Option(None, "--model", help="覆盖 AGENT_MODEL"),
     base_url: str | None = typer.Option(None, "--base-url", help="覆盖 AGENT_BASE_URL"),
     workers: int = typer.Option(4, "--workers", "-w", help="AI Agent 并发数"),

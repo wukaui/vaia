@@ -13,6 +13,16 @@ from pydantic_ai import Agent
 from aiav.agent import analyze_file_with_agent
 from aiav.budget import TokenBudget
 from aiav.cache import ScanCache, cache_enabled, report_from_cache
+from aiav.criteria import (
+    AI_GATE,
+    CRITERIA,
+    CriterionHit,
+    band_label,
+    classify_reason,
+    decide as decide_deterministic,
+    file_score,
+    update_stats as update_criteria_stats,
+)
 from aiav.disposition import StateStore, default_store
 from aiav.models import FileReport, PreliminaryEvidence, RiskLevel, ScanDeps, Verdict
 from aiav.preload import (
@@ -67,7 +77,12 @@ def _file_size(path: Path) -> int:
 # 预筛分数阈值：达到它就该交人工/AI 复核。单独抽成常量是因为"读不了"这条路径
 # 必须能**明确**顶到阈值上（见 quick_prefilter 的 read_error 分支），
 # 散在代码里的字面量 12 会让那处改动看起来很随意。
-SUSPICIOUS_SCORE_THRESHOLD = 12
+#
+# 2026-09-27 换刻度：从"老口径 12 分"换成"Assemblyline 刻度 300 分"。
+# **语义没变** —— `criteria.SIGNAL_UNIT = 25` 就是把老口径的 12 分映射到上游
+# `verdict.suspicious = 300` 上（300 / 12 = 25），老口径每条权重一个都没调。
+# 保留这个名字是因为报告/测试/外部脚本都在读它。
+SUSPICIOUS_SCORE_THRESHOLD = AI_GATE
 
 # XLM 宏表里「`=CHAR(<常量>)` 单字符单元格」超过这个数就算异常形态。
 # 依据：真实在野 ZLoader 系 Excel 4.0 样本实测 526 / 569 / 569 个；
@@ -103,6 +118,39 @@ DOUBLE_EXTENSIONS = {
     ".pdf.lnk", ".doc.lnk", ".docx.lnk", ".jpg.lnk", ".xls.lnk", ".txt.lnk", ".zip.lnk",
     ".pdf.js", ".pdf.vbs", ".doc.hta", ".pdf.scr", ".txt.bat", ".pdf.cmd", ".pdf.ps1",
 }
+
+
+#: 运营白名单的进程内缓存。白名单是"确定性结案"判据（`DET_SAFELIST_HIT`），
+#: 每个文件都去读一次 JSON 在全量扫描（几千个文件）下是纯浪费；进程内缓存一次即可。
+#: 代价：扫描**过程中**往白名单里加条目，本进程不会立刻生效 —— 记在这里免得被当 bug。
+_WHITELIST_CACHE: set[str] | None = None
+_WHITELIST_LOCK = threading.Lock()
+
+
+def load_whitelisted_hashes() -> set[str]:
+    """运营白名单里的 sha256 集合（进程内缓存一次）。"""
+    global _WHITELIST_CACHE
+    if _WHITELIST_CACHE is not None:
+        return _WHITELIST_CACHE
+    with _WHITELIST_LOCK:
+        if _WHITELIST_CACHE is not None:
+            return _WHITELIST_CACHE
+        try:
+            store = default_store()
+            _WHITELIST_CACHE = {
+                str(item.get("sha256", "")).lower()
+                for item in store.whitelist()
+                if item.get("sha256")
+            }
+        except Exception:  # noqa: BLE001 - 白名单读不到不该让扫描挂掉
+            _WHITELIST_CACHE = set()
+        return _WHITELIST_CACHE
+
+
+def reset_whitelist_cache() -> None:
+    """测试用：清掉白名单缓存。"""
+    global _WHITELIST_CACHE
+    _WHITELIST_CACHE = None
 
 
 def compute_sha256(path: Path, chunk_size: int = 1024 * 1024) -> str:
@@ -175,8 +223,28 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
     """
     ext = path.suffix.lower()
     name_lower = path.name.lower()
-    score = 0
     reasons: list[str] = []
+    # 判据命中（2026-09-27）：分数**不再**由这里的字面量决定，而是每条信号先落成一条
+    # `CriterionHit`（判据 ID + 理由 + 命中次数 + 签名名），最后由 `criteria.score_hits`
+    # 按判据表算分。好处：每条分都能追到判据表里那一行（名字/上限/工具/ATT&CK），
+    # 报告里能说清"这 375 分是谁给的"，而不是"总分 375，来源不明"。
+    hits: list[CriterionHit] = []
+    unclassified: list[str] = []
+
+    def _hit(heur_id: str, reason: str, *, frequency: int = 1,
+             signatures: Sequence[str] = (), safelisted: bool = False) -> None:
+        hits.append(CriterionHit(heur_id, reason, frequency, tuple(signatures), safelisted))
+        reasons.append(reason)
+
+    def _hit_reason(reason: str, *, signatures: Sequence[str] = ()) -> None:
+        """产出方只给了一句理由文本时走这里：分类不出来的**显式记账**，不许吞。"""
+        heur_id = classify_reason(reason)
+        if heur_id is None:
+            unclassified.append(reason)
+            reasons.append(reason)
+            return
+        _hit(heur_id, reason, signatures=signatures)
+
     yara_hits = run_yara(path)
 
     read_error = ""
@@ -189,8 +257,7 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
         # 入口那层（compute_sha256 失败）是判 suspicious+review 的，两层口径必须一致。
         head = b""
         read_error = f"{type(exc).__name__}: {exc}"
-        score = max(score, SUSPICIOUS_SCORE_THRESHOLD)
-        reasons.append(f"读取失败（无法排除，按需人工复核）: {read_error[:160]}")
+        _hit("READ_ERROR", f"读取失败（无法排除，按需人工复核）: {read_error[:160]}")
 
     # EICAR：判"文件**就是** EICAR 测试文件"，不是"文件**含有** EICAR 字符串"。
     #
@@ -209,33 +276,26 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
     known_bad_hash = sha256.lower() in load_known_bad_hashes()
 
     if eicar:
-        score += 100
-        reasons.append("EICAR 测试文件")
+        _hit("DET_EICAR", "EICAR 测试文件")
     if known_bad_hash:
-        score += 100
-        reasons.append("命中本地恶意哈希库")
+        _hit("DET_KNOWN_BAD_HASH", "命中本地恶意哈希库")
     strong_yara = [h for h in yara_hits if h not in WEAK_YARA_RULES]
     if strong_yara:
-        score += 30
-        reasons.append("YARA 命中: " + ", ".join(strong_yara))
+        _hit("STRONG_YARA", "YARA 命中: " + ", ".join(strong_yara), signatures=strong_yara)
     elif yara_hits:
-        score += 5
-        reasons.append("弱 YARA 命中: " + ", ".join(yara_hits))
+        _hit("WEAK_YARA", "弱 YARA 命中: " + ", ".join(yara_hits), signatures=yara_hits)
 
     if ext in HIGH_RISK_EXTENSIONS:
-        score += 5
-        reasons.append(f"高风险扩展名: {ext}")
+        _hit("HIGH_RISK_EXTENSION", f"高风险扩展名: {ext}")
 
     for double_ext in DOUBLE_EXTENSIONS:
         if name_lower.endswith(double_ext):
-            score += 8
-            reasons.append(f"可疑双扩展名: {double_ext}")
+            _hit("DOUBLE_EXTENSION", f"可疑双扩展名: {double_ext}")
 
     suspicious_name_words = ("crack", "keygen", "hack", "inject", "loader", "trojan", "ransom", "miner", "stealer")
     for word in suspicious_name_words:
         if word in name_lower:
-            score += 2
-            reasons.append(f"文件名包含可疑词: {word}")
+            _hit("SUSPICIOUS_NAME_WORD", f"文件名包含可疑词: {word}")
 
     # 文本/脚本类快速检查：脚本的"可执行面"就是文本，所以要多读一段（旧实现只看前 4KB，
     # 混淆脚本把载荷放在尾部就能整段躲过预筛）。上限 256KB，纯文本不会拖慢扫描。
@@ -246,11 +306,11 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
             text = blob.decode("utf-8", errors="ignore")
             strong, weak = script_signal_tiers(text)
             if strong:
-                score += 5 * min(len(strong), 4)
-                reasons.append("脚本强特征: " + ", ".join(strong[:6]))
+                _hit("SCRIPT_STRONG", "脚本强特征: " + ", ".join(strong[:6]),
+                     frequency=min(len(strong), 4), signatures=strong[:6])
             if weak:
-                score += 3 * min(len(weak), 2)
-                reasons.append("脚本弱特征: " + ", ".join(weak[:6]))
+                _hit("SCRIPT_WEAK", "脚本弱特征: " + ", ".join(weak[:6]),
+                     frequency=min(len(weak), 2), signatures=weak[:6])
         except Exception:  # noqa: BLE001 - 脚本解析失败不影响其它信号
             pass
 
@@ -269,16 +329,16 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
             # XLM 宏表存在时，容器字节里的 URL/LOLBin 子串已经由 XLM 分支按档计分，
             # 这里再算一次等于同一处证据记两遍（实测会把良性表顶过阈值）。
             if patterns and ext not in OLE_DOC_EXTENSIONS:
-                score += 5 * min(len(patterns), 4)
-                reasons.append("容器可疑模式: " + ", ".join(patterns[:8]))
+                _hit("CONTAINER_PATTERN", "容器可疑模式: " + ", ".join(patterns[:8]),
+                     frequency=min(len(patterns), 4), signatures=patterns[:8])
             elif patterns and ext in OLE_DOC_EXTENSIONS:
                 try:
                     _xlm = extract_xlm_macro_info(path)
                 except Exception:  # noqa: BLE001
                     _xlm = {}
                 if not _xlm.get("has_xlm"):
-                    score += 5 * min(len(patterns), 4)
-                    reasons.append("容器可疑模式: " + ", ".join(patterns[:8]))
+                    _hit("CONTAINER_PATTERN", "容器可疑模式: " + ", ".join(patterns[:8]),
+                         frequency=min(len(patterns), 4), signatures=patterns[:8])
         except Exception:
             pass
 
@@ -288,15 +348,14 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
         try:
             info = extract_ole_macro_info(path)
             if info.get("has_macros"):
-                score += 5
-                reasons.append("包含 VBA 宏")
+                _hit("MACRO_PRESENT", "包含 VBA 宏")
                 # 入口名（AutoOpen 等）不算可疑特征，否则正常宏文档全是误报
                 macro_patterns = [
                     p for p in (info.get("patterns") or []) if p not in NEUTRAL_PATTERN_LABELS
                 ]
                 if macro_patterns:
-                    score += 5 * min(len(macro_patterns), 4)
-                    reasons.append("宏内可疑模式: " + ", ".join(macro_patterns[:8]))
+                    _hit("MACRO_PATTERN", "宏内可疑模式: " + ", ".join(macro_patterns[:8]),
+                         frequency=min(len(macro_patterns), 4), signatures=macro_patterns[:8])
         except Exception:
             pass
 
@@ -308,15 +367,14 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
         try:
             xlm = extract_xlm_macro_info(path)
             if xlm.get("has_xlm"):
-                score += 5
-                reasons.append(f"包含 Excel 4.0 (XLM) 宏表 ×{xlm.get('macro_sheets', 1)}")
+                _hit("XLM_PRESENT", f"包含 Excel 4.0 (XLM) 宏表 ×{xlm.get('macro_sheets', 1)}")
                 exec_hits = [p for p in (xlm.get("exec_patterns") or [])
                              if p not in NEUTRAL_PATTERN_LABELS]
                 info_hits = [p for p in (xlm.get("info_patterns") or [])
                              if p not in NEUTRAL_PATTERN_LABELS]
                 if exec_hits:
-                    score += 10 * min(len(exec_hits), 2)
-                    reasons.append("XLM 宏内执行类模式: " + ", ".join(exec_hits[:4]))
+                    _hit("XLM_EXEC_PATTERN", "XLM 宏内执行类模式: " + ", ".join(exec_hits[:4]),
+                         frequency=min(len(exec_hits), 2), signatures=exec_hits[:4])
                 # 信息类**不计分**：读环境/取数/列目录在业务宏表里是常态
                 # （实测：计分会让 60 个良性宏表里 24 个越界）。只在理由里留痕，供人工复核。
                 if info_hits:
@@ -329,12 +387,10 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
                 # 两者都是弱信号：单独一个到不了阈值（5 / 10 < 12），合起来才送人工复核。
                 hidden = int(xlm.get("hidden_macro_sheets") or 0)
                 if hidden:
-                    score += 5
-                    reasons.append(f"XLM 宏表被隐藏 ×{hidden}")
+                    _hit("XLM_HIDDEN", f"XLM 宏表被隐藏 ×{hidden}", frequency=hidden)
                 char_cells = int(xlm.get("char_cells") or 0)
                 if char_cells >= XLM_CHAR_CELL_MIN:
-                    score += 10
-                    reasons.append(f"XLM 宏表内 CHAR() 逐字符拼装 ×{char_cells}（明文为零）")
+                    _hit("XLM_CHAR_CELLS", f"XLM 宏表内 CHAR() 逐字符拼装 ×{char_cells}（明文为零）")
         except Exception:  # noqa: BLE001 - XLM 解析失败不影响其它信号
             pass
 
@@ -346,8 +402,8 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
 
             pdf_info = analyze_pdf(path)
             if pdf_info.get("is_pdf") and pdf_info.get("scores"):
-                score += int(pdf_info["scores"])
-                reasons.extend(pdf_info["reasons"])
+                for pdf_reason in pdf_info["reasons"]:
+                    _hit_reason(pdf_reason)
         except Exception:  # noqa: BLE001 - PDF 解析失败不影响其它信号
             pass
 
@@ -357,8 +413,7 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
         try:
             packing = pe_packing_signals(path)
             if packing:
-                score += 4
-                reasons.append("疑似加壳: " + ", ".join(packing[:4]))
+                _hit("PACKING", "疑似加壳: " + ", ".join(packing[:4]), signatures=packing[:4])
         except Exception:
             pass
 
@@ -375,8 +430,8 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
     try:
         struct_score, struct_reasons = structure_signals(path, ext)
         if struct_score:
-            score += struct_score
-            reasons.extend(struct_reasons)
+            for struct_reason in struct_reasons:
+                _hit_reason(struct_reason)
     except Exception:  # noqa: BLE001 - 结构解析失败不影响其它信号
         pass
 
@@ -387,6 +442,22 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
         except Exception as exc:  # noqa: BLE001
             signature = {"status": "unknown", "conclusion": "unknown",
                          "error": f"签名证据获取失败: {exc}"}
+
+    # ---- 确定性结案判据（2026-09-27）----
+    # 这两条不进"弱信号累加"，它们各自就是结论：
+    #   · 签名有效且签发者可信 → 确定性判干净（上游 safelist 语义：签名安全则分数归零）
+    #   · 白名单命中           → 确定性判干净
+    # 判白优先于判恶意：一条可信签名不会因为别处有弱信号而失效。
+    if signature.get("status") == "Valid" and signature.get("trusted_signer"):
+        _hit("DET_TRUSTED_SIGNATURE",
+             f"内嵌签名有效且签发者可信: {signature.get('signer_cn') or signature.get('signer')}")
+    if sha256.lower() in load_whitelisted_hashes():
+        _hit("DET_SAFELIST_HIT", "命中运营白名单")
+
+    # 分数由判据表算出来（每条夹自己的 max_score），不再由散落的字面量累加。
+    # 判干净方向的结案判据命中时**归零**（上游 safelist 语义），所以分数与结论同源。
+    score, scored, clean_ids = file_score(hits)
+    verdict_now = decide_deterministic(hits)
 
     return PreliminaryEvidence(
         path=str(path),
@@ -400,11 +471,76 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
         known_bad_hash=known_bad_hash,
         read_error=read_error,
         signature=signature,
+        criteria_hits=[_hit_record(s) for s in scored],
+        unclassified_signals=unclassified,
+        deterministic={
+            "disposition": verdict_now.disposition.value,
+            "tier": verdict_now.tier.value,
+            "band": verdict_now.band.value,
+            "band_label": band_label(verdict_now.score),
+            "score": verdict_now.score,
+            "sends_to_ai": verdict_now.sends_to_ai,
+            "reasons": verdict_now.reasons,
+            "gate": AI_GATE,
+        },
     )
 
 
+def _hit_record(scored) -> dict:
+    """一条判据命中的**报告形状** —— 字段对齐上游 `odm/models/result.py::Heuristic`。"""
+    crit = CRITERIA.get(scored.heur_id)
+    return {
+        "heur_id": scored.heur_id,
+        "name": crit.name if crit else scored.name,
+        "description": crit.description if crit else "",
+        "score": scored.score,
+        "max_score": crit.max_score if crit else None,
+        "frequency": scored.frequency,
+        "filetype": crit.filetype if crit else "*",
+        "produced_by": crit.produced_by if crit else "",
+        "attack": scored.attack,
+        "signature": [
+            {"name": name, "frequency": freq, "safe": bool(scored.signature_safe.get(name))}
+            for name, freq in scored.signatures.items()
+        ],
+        "safelisted": scored.zeroed_by_safelist,
+        "direction": crit.direction.value if crit else "suspect",
+        "conclusive": bool(crit.conclusive) if crit else False,
+    }
+
+
 def heuristic_verdict(evidence: PreliminaryEvidence) -> Verdict:
-    """AI 不可用时的降级策略，也用于预筛证据定级。"""
+    """AI 不可用时的降级策略，也用于预筛证据定级。
+
+    2026-09-27：**确定性结案的结论优先** —— 一条"AV 库命中"或"签名可信"是结案，
+    不是"降级到规则判定"。旧实现只认 eicar/known_bad_hash 两个布尔量，
+    新增的结案判据（ClamAV 命中 / 白名单 / 可信签名）会被降级路径覆盖掉。
+    """
+    disposition = (evidence.deterministic or {}).get("disposition")
+    if disposition == "closed_malicious":
+        hits = [h for h in evidence.criteria_hits if h.get("conclusive") and h.get("direction") == "malicious"]
+        return Verdict(
+            risk=RiskLevel.malicious,
+            confidence=0.99,
+            category="deterministic_malicious",
+            summary="确定性判据结案："
+                    + "、".join(f"{h['name']}({h['heur_id']})" for h in hits),
+            evidence=[f"{h['heur_id']}: {h['name']} +{h['score']}" for h in hits] or evidence.reasons,
+            mitre=sorted({a["attack_id"] for h in hits for a in h.get("attack", [])}),
+            recommended_action="isolate",
+        )
+    if disposition == "closed_clean":
+        hits = [h for h in evidence.criteria_hits if h.get("conclusive") and h.get("direction") == "clean"]
+        return Verdict(
+            risk=RiskLevel.clean,
+            confidence=0.99,
+            category="deterministic_clean",
+            summary="确定性判据结案（判干净）："
+                    + "、".join(f"{h['name']}({h['heur_id']})" for h in hits),
+            evidence=[f"{h['heur_id']}: {h['name']}" for h in hits],
+            mitre=[],
+            recommended_action="ignore",
+        )
     if evidence.eicar or evidence.known_bad_hash:
         return Verdict(
             risk=RiskLevel.malicious,
@@ -988,16 +1124,26 @@ def enforce_policy(
 
 
 def _signature_check_enabled(agent_present: bool) -> bool:
-    """签名证据块默认只在会进 AI 的路径上采集（要调 Windows 验签，约 0.5s/文件）。
+    """签名证据块要不要采集（纯 Python 验签，约 0.5s/文件，结果按 mtime 缓存）。
 
-    AI_AV_SIGNATURE_CHECK=1 强制开（纯规则扫描也采集）、=0 强制关。
+    2026-09-27 起签名不只是"给 AI 看的证据"，它自己就是一条**确定性结案判据**
+    （`DET_TRUSTED_SIGNATURE`：签名有效且签发者可信 → 判干净、不送 AI）。
+    所以 `auto` 模式下除了"会进 AI"之外，**只要①层要出结论**就该采。
+
+    AI_AV_SIGNATURE_CHECK 三档：
+      `auto`（默认）  会进 AI，或开了①层结案（默认开）→ 采
+      `1`             纯规则扫描也采（全量机器扫描会明显变慢，0.5s/文件）
+      `0`             一律不采（这一档下 `DET_TRUSTED_SIGNATURE` 永远不命中，
+                      送审率会明显变高 —— 报告里必须写清是哪一档）
     """
     mode = os.getenv("AI_AV_SIGNATURE_CHECK", "auto").strip().lower()
     if mode in ("0", "false", "no", "off"):
         return False
     if mode in ("1", "true", "yes", "on"):
         return True
-    return agent_present
+    return agent_present or os.getenv("AI_AV_DETERMINISTIC_CLOSE", "1").strip().lower() not in (
+        "0", "false", "no", "off"
+    )
 
 
 def _risk_rank(risk: RiskLevel) -> int:
@@ -1163,7 +1309,7 @@ def _unpack_enabled() -> bool:
 def scan_file(
     path: Path,
     agent: Agent | None = None,
-    ai_threshold: int = 5,
+    ai_threshold: int = AI_GATE,
     store: StateStore | None = None,
     allow_unpack: bool = True,
     agent_samples: int | None = None,
@@ -1289,7 +1435,9 @@ def scan_file(
     # 而字符串/规则命中 = 这个文件**含有**某种特征，规则文件、安全工具源码、测试样本
     # 都会命中，只有语境能定性 —— 那正是"第二意见"要干的活，不能短路掉。
     # （EICAR 保留短路：完整测试标记是标准测试产物，不属于"特征命中"这一类。）
-    if evidence.eicar or evidence.known_bad_hash:
+    # 确定性结案短路（2026-09-27）：判恶意（哈希/EICAR/AV 库）与判干净（签名可信/白名单）
+    # 都**不送 AI** —— 这是送审率的主要闸门。旧实现只短路 eicar/known_bad_hash 两条。
+    if (evidence.deterministic or {}).get("disposition") in ("closed_malicious", "closed_clean"):
         audit: list[dict] = []
         verdict = heuristic_verdict(evidence)
         if deterministic:
@@ -1302,6 +1450,9 @@ def scan_file(
             prefilter_score=evidence.prefilter_score,
             prefilter_reasons=evidence.reasons,
             yara_hits=evidence.yara_hits,
+            criteria_hits=evidence.criteria_hits,
+            unclassified_signals=evidence.unclassified_signals,
+            deterministic=evidence.deterministic,
             verdict=verdict,
             agent_used=False,
             policy_actions=audit,
@@ -1617,6 +1768,9 @@ def scan_file(
         prefilter_score=evidence.prefilter_score,
         prefilter_reasons=evidence.reasons,
         yara_hits=evidence.yara_hits,
+        criteria_hits=evidence.criteria_hits,
+        unclassified_signals=evidence.unclassified_signals,
+        deterministic=evidence.deterministic,
         verdict=verdict,
         agent_used=agent_used,
         agent_trace=agent_trace,
@@ -1647,7 +1801,7 @@ def scan_file(
 def scan_files_concurrent(
     files: Sequence[Path],
     agent_factory: Callable[[], Agent] | None = None,
-    ai_threshold: int = 5,
+    ai_threshold: int = AI_GATE,
     workers: int = 4,
     agent_samples: int | None = None,
     budget: TokenBudget | None = None,

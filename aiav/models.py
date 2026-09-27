@@ -48,6 +48,17 @@ class PreliminaryEvidence(BaseModel):
     read_error: str = ""
     # 确定性签名证据块（tools.signature_evidence），只从工具/Windows 验签来，不靠模型推断
     signature: dict[str, Any] = Field(default_factory=dict)
+    # ①层判据命中（2026-09-27）：每条都对齐 Assemblyline `result.py::Heuristic` 的形状
+    # （heur_id / name / description / score / max_score / attack / signature）。
+    # 用途：报告里能说清"这 375 分是哪几条判据给的、每条上限多少、哪个工具产出的"。
+    criteria_hits: list[dict[str, Any]] = Field(default_factory=list)
+    # 产出方给了理由文本、但判据表里分不出是哪条判据的信号。**必须为空**：
+    # 不为空就说明有信号加了分却没进判据表（幽灵分）。报告与测试都会盯这个字段。
+    unclassified_signals: list[str] = Field(default_factory=list)
+    # 确定性层的结论（三档语义）：disposition / tier / band / score / gate / reasons。
+    # disposition ∈ {closed_malicious, closed_clean, send_ai, pass}。
+    # ⚠️ `pass` **不是判白**，只是"没线索，不值得花 token"。
+    deterministic: dict[str, Any] = Field(default_factory=dict)
 
 
 class FileReport(BaseModel):
@@ -58,6 +69,11 @@ class FileReport(BaseModel):
     prefilter_score: int
     prefilter_reasons: list[str] = Field(default_factory=list)
     yara_hits: list[str] = Field(default_factory=list)
+    # ①层判据命中 + 确定性结论（2026-09-27）。报告结构照 Assemblyline 摆的证据链
+    # 就是从这里长出来的，见 `aiav/assemblyline_view.py`。
+    criteria_hits: list[dict[str, Any]] = Field(default_factory=list)
+    unclassified_signals: list[str] = Field(default_factory=list)
+    deterministic: dict[str, Any] = Field(default_factory=dict)
     verdict: Verdict
     agent_used: bool = False
     agent_trace: list[dict[str, Any]] = Field(default_factory=list)
