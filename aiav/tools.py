@@ -502,6 +502,49 @@ def capa_ready() -> tuple[bool, str]:
 
 # 跑不了的检测项：不是"没发现问题"，是"根本没跑"。这两件事必须分开告诉 AI，
 # 否则它会把"缺上下文"读成"没风险"（对照 beenuar/AiSOC 的教训）。
+# ClamAV：传统 AV 引擎的签名库命中。上游明说 ≥1000 档（单条即可定恶意、几乎无误报）的
+# 分数就来自这类**签名服务** —— 所以 `DET_CLAMAV_SIGNATURE` 是①层里最有价值的一条判据。
+#
+# ⚠️ 本机没装 ClamAV（`aiav tools` 里明写"未安装"）。这条判据因此在本轮实测里命中 0，
+# 报告里必须显式标出 —— "没装"不等于"查过了没有"。
+CLAMAV_TIMEOUT = 120
+
+
+def clamav_evidence(path: Path, runner=None) -> dict[str, Any]:
+    """跑一次 ClamAV（只读扫描，不上传、不联网）。
+
+    返回 `{available, infected, signature, raw, error}`。
+    `available=False` 表示**本机没有 ClamAV** —— 调用方据此把这条判据记成"未产出"，
+    不许当成"扫过且干净"。
+
+    `runner` 只给测试注入用（默认走 subprocess）。
+    """
+    exe = _find_exe("clamscan", "clamdscan", env_var="CLAMAV_EXE")
+    if not exe:
+        return {"available": False, "infected": False, "signature": "",
+                "raw": "", "error": "ClamAV 未安装（clamscan / clamdscan 都不在 PATH 里）"}
+
+    cmd = [exe, "--no-summary", "--stdout", str(path)]
+    try:
+        if runner is not None:
+            proc = runner(cmd)
+        else:
+            proc = subprocess.run(cmd, capture_output=True, timeout=CLAMAV_TIMEOUT)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {"available": True, "infected": False, "signature": "", "raw": "",
+                "error": f"{type(exc).__name__}: {exc}"}
+
+    out = ((proc.stdout or b"") + (proc.stderr or b"")).decode("utf-8", errors="replace")
+    # clamscan 命中时退出码 1，输出形如 `/path/file: Win.Trojan.Agent-123 FOUND`
+    infected = "FOUND" in out
+    signature = ""
+    if infected:
+        line = next((ln for ln in out.splitlines() if "FOUND" in ln), "")
+        signature = line.split(":", 1)[1].replace("FOUND", "").strip() if ":" in line else line.strip()
+    return {"available": True, "infected": infected, "signature": signature,
+            "raw": out.strip()[:500], "error": ""}
+
+
 def unavailable_detections() -> list[str]:
     """返回本次环境不可用的检测项及原因（写进送审提示词）。"""
     items: list[str] = []

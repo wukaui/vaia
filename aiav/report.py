@@ -144,6 +144,16 @@ def build_summary(reports: list[FileReport]) -> dict[str, Any]:
             # 核验铁律：这个数**必须为 0**。不为 0 说明有信号加了分却没进判据表。
             "files_with_unclassified_signals": len(unclassified),
             "unclassified_signals": sorted({s for r in reports for s in (r.unclassified_signals or [])})[:10],
+            # 工具可用性（核验铁律：先验"工具真跑了吗"）。未安装的检测项直接列在报告抬头，
+            # 免得读报告的人把"没报 AV 命中"读成"AV 查过了没有"。
+            "unavailable_detections": _unavailable_detections(),
+            "conclusive_producers": {
+                "DET_KNOWN_BAD_HASH": "内置哈希库（aiav/data/known_bad_hashes.txt）",
+                "DET_CLAMAV_SIGNATURE": "clamscan / clamdscan",
+                "DET_EICAR": "内置常量",
+                "DET_TRUSTED_SIGNATURE": "aiav.authenticode（纯 Python 验签）",
+                "DET_SAFELIST_HIT": "运营白名单",
+            },
         },
         "dimensions": dimensions,
         "risk": {k: risk.get(k, 0) for k in ("clean", "suspicious", "malicious")},
@@ -351,6 +361,15 @@ def _assemblyline_payload(reports: list[FileReport]) -> dict[str, Any]:
         "schema_errors": schema_errors,
         "submission": submission,
     }
+
+
+def _unavailable_detections() -> list[str]:
+    try:
+        from aiav.tools import unavailable_detections
+
+        return unavailable_detections()
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def load_criteria_stats() -> dict[str, Any]:
@@ -760,6 +779,11 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
            f"{_esc('、'.join(det['unclassified_signals']))} —— 有信号加了分却没进判据表，"
            "这批数字按核验铁律作废。</b>" if det["files_with_unclassified_signals"] else "")
         + "</div>")
+    unavailable = det.get("unavailable_detections") or []
+    unavailable_note = (
+        "<div class='meta'><b>未安装 / 未配置的检测项（这些判据在本批里是空的，不是『跑了没问题』）：</b>"
+        + _esc("；".join(unavailable)) + "</div>"
+    ) if unavailable else ""
     det_table = "".join(
         f"<tr><td><code>{_esc(k)}</code></td><td>{_esc(v)}</td></tr>"
         for k, v in sorted(det["criteria_fired"].items(), key=lambda kv: -kv[1]))
@@ -840,6 +864,7 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
     {_card("未结案（≠判白）", det["unresolved"], "#ef6c00")}
   </div>
   {det_note}
+  {unavailable_note}
   {sampling_note}
   {retry_note}
   {usage_note}

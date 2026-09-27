@@ -55,6 +55,9 @@ class PreliminaryEvidence(BaseModel):
     # 产出方给了理由文本、但判据表里分不出是哪条判据的信号。**必须为空**：
     # 不为空就说明有信号加了分却没进判据表（幽灵分）。报告与测试都会盯这个字段。
     unclassified_signals: list[str] = Field(default_factory=list)
+    # ClamAV 的产出状态（≥1000 档判据的产出方）。`available=False` = **本机没装**，
+    # 不许读成"扫过且干净" —— 核验铁律要求这一项在报告里显式可见。
+    clamav: dict[str, Any] = Field(default_factory=dict)
     # 确定性层的结论（三档语义）：disposition / tier / band / score / gate / reasons。
     # disposition ∈ {closed_malicious, closed_clean, send_ai, pass}。
     # ⚠️ `pass` **不是判白**，只是"没线索，不值得花 token"。

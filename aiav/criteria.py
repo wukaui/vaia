@@ -743,28 +743,23 @@ def decide(
     上游 safelist 的语义就是"这条不算分"，不是"扣分"。
     """
     hits = list(hits)
-    total, scores, _clean_ids = file_score(hits)
-
-    by_id = {h.heur_id for h in hits}
+    total, scores, clean_ids = file_score(hits)
+    if safelist_hit and "DET_SAFELIST_HIT" not in clean_ids:
+        clean_ids = clean_ids + ["DET_SAFELIST_HIT"]
 
     reasons = [f"{s.heur_id}: {CRITERIA[s.heur_id].name} +{s.score}" for s in scores if s.score]
 
     # ---- 判干净方向：确定性结案 ----
-    if safelist_hit or "DET_SAFELIST_HIT" in by_id:
+    # 这里不写死判据 ID 清单，而是问"有没有 CLEAN 方向的结案判据命中" ——
+    # 写死清单踩过一次：新增 `DET_SIGNATURE_SAFELISTED` 时忘了加分支，
+    # 分数被 `file_score` 归零了、处置却落到 `pass`（"没线索"），自相矛盾。
+    if clean_ids:
         return DeterministicVerdict(
             disposition=Disposition.CLOSED_CLEAN,
             score=0,
             tier=ScoreTier.CONCLUSIVE,
             band=band_of(0),
-            reasons=["DET_SAFELIST_HIT: 白名单命中 → 确定性结案（判干净），不送 AI"],
-        )
-    if "DET_TRUSTED_SIGNATURE" in by_id:
-        return DeterministicVerdict(
-            disposition=Disposition.CLOSED_CLEAN,
-            score=0,
-            tier=ScoreTier.CONCLUSIVE,
-            band=band_of(0),
-            reasons=["DET_TRUSTED_SIGNATURE: 内嵌签名有效且签发者可信 → 确定性结案（判干净），不送 AI"],
+            reasons=[f"{h}: 确定性结案（判干净），不送 AI" for h in clean_ids],
         )
 
     # ---- 判恶意方向：确定性结案（必须是 ≥1000 档的判据，不许靠弱信号累加） ----

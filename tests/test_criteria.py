@@ -251,3 +251,53 @@ def test_criterion_can_be_scored(heur_id):
     scored = C.score_hits([C.CriterionHit(heur_id, crit.name)])[0]
     assert scored.heur_id == heur_id
     assert scored.score <= (crit.max_score if crit.max_score is not None else 10**9)
+
+
+# --------------------------------------------------------------------------------------
+# 5. ClamAV 产出方（≥1000 档判据里最有价值的一条）
+# --------------------------------------------------------------------------------------
+def test_clamav_reports_unavailable_instead_of_clean():
+    """**没装 ClamAV ≠ 扫过且干净** —— 这条如果反了，整批数字都会被读错。"""
+    from aiav.tools import clamav_evidence
+
+    ev = clamav_evidence(Path("/tmp/whatever.exe"))
+    if not ev["available"]:
+        assert ev["infected"] is False
+        assert "未安装" in ev["error"]
+    else:  # 装了的话至少得能跑出结构
+        assert set(ev) >= {"available", "infected", "signature", "raw", "error"}
+
+
+def test_clamav_hit_becomes_a_conclusive_criterion(tmp_path, monkeypatch):
+    """注入一个假的 clamscan，验证命中真的能走到"确定性结案判恶意"。"""
+    from aiav import tools
+
+    fake = tmp_path / "clamscan"
+    fake.write_text("#!/bin/sh\necho \"$3: Win.Trojan.Agent-123 FOUND\"\nexit 1\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("CLAMAV_EXE", str(fake))
+
+    def runner(cmd):
+        class P:
+            stdout = b"/tmp/x.exe: Win.Trojan.Agent-123 FOUND\n"
+            stderr = b""
+            returncode = 1
+        return P()
+
+    ev = tools.clamav_evidence(Path("/tmp/x.exe"), runner=runner)
+    assert ev["available"] and ev["infected"]
+    assert ev["signature"] == "Win.Trojan.Agent-123"
+
+    verdict = C.decide([C.CriterionHit("DET_CLAMAV_SIGNATURE", f"ClamAV 命中: {ev['signature']}",
+                                       signatures=(ev["signature"],))])
+    assert verdict.disposition is C.Disposition.CLOSED_MALICIOUS
+    assert verdict.score == C.CONCLUSIVE_SCORE
+
+
+def test_any_clean_conclusive_criterion_closes_clean():
+    """判干净方向的结案判据**任何一条**命中都要结案 —— 不许写死 ID 清单漏掉新的那条。"""
+    for crit in C.CRITERIA.values():
+        if crit.conclusive and crit.direction is C.Direction.CLEAN:
+            verdict = C.decide([C.CriterionHit(crit.heur_id, crit.name)])
+            assert verdict.disposition is C.Disposition.CLOSED_CLEAN, crit.heur_id
+            assert verdict.score == 0, crit.heur_id

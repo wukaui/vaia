@@ -54,6 +54,7 @@ from aiav.tools import (
     load_known_bad_hashes,
     pe_packing_signals,
     run_yara,
+    clamav_evidence,
     signature_evidence,
     unavailable_detections,
 )
@@ -443,6 +444,21 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
             signature = {"status": "unknown", "conclusion": "unknown",
                          "error": f"签名证据获取失败: {exc}"}
 
+    # ---- ClamAV（≥1000 档，确定性结案判恶意）----
+    # 装了才跑；没装就**显式记成"未产出"**，不记成"扫过且干净"。
+    clamav = {"available": False, "infected": False, "signature": "", "error": ""}
+    if ext in {".exe", ".dll", ".sys", ".scr", ".cpl", ".ocx", ".com", ".pif", ".pyd", ".efi",
+               ".doc", ".docm", ".xls", ".xlsm", ".pdf", ".js", ".vbs", ".ps1", ".lnk", ".rtf",
+               ".jar", ".zip", ".rar", ".7z"} or ext == "":
+        try:
+            clamav = clamav_evidence(path)
+        except Exception as exc:  # noqa: BLE001 - AV 跑不动不影响其它信号
+            clamav = {"available": False, "infected": False, "signature": "",
+                      "error": f"{type(exc).__name__}: {exc}"}
+        if clamav.get("infected"):
+            _hit("DET_CLAMAV_SIGNATURE", f"ClamAV 命中: {clamav.get('signature') or '(未取到签名名)'}",
+                 signatures=(clamav.get("signature") or "clamav",))
+
     # ---- 确定性结案判据（2026-09-27）----
     # 这两条不进"弱信号累加"，它们各自就是结论：
     #   · 签名有效且签发者可信 → 确定性判干净（上游 safelist 语义：签名安全则分数归零）
@@ -473,6 +489,10 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
         signature=signature,
         criteria_hits=[_hit_record(s) for s in scored],
         unclassified_signals=unclassified,
+        clamav={"available": bool(clamav.get("available")),
+                "infected": bool(clamav.get("infected")),
+                "signature": clamav.get("signature") or "",
+                "error": clamav.get("error") or ""},
         deterministic={
             "disposition": verdict_now.disposition.value,
             "tier": verdict_now.tier.value,
