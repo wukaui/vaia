@@ -199,6 +199,13 @@ def build_summary(reports: list[FileReport]) -> dict[str, Any]:
             "ms": round(sum(float((r.evidence_preload or {}).get("elapsed_ms") or 0)
                             for r in reports), 1),
             "truncated": sum(1 for r in reports if (r.evidence_preload or {}).get("truncated")),
+            # 分流·取证层（2026-09-27）：这一轮有多少文件**跳过**了 capa/floss、
+            # 有多少文件真跑了。跳过必须在报告里看得见 —— 否则读报告的人会把
+            # "没报注入能力"读成"查过了、没有"。
+            "deep_done": sum(1 for r in reports
+                             if (r.evidence_preload or {}).get("deep_forensics") == "done"),
+            "deep_skipped": sum(1 for r in reports
+                                if (r.evidence_preload or {}).get("deep_forensics") == "skipped"),
         },
         "top_warnings": warnings[:5],
     }
@@ -502,6 +509,8 @@ def _file_row(r: FileReport, index: int) -> str:
                    f"{float(pl.get('elapsed_ms') or 0) / 1000:.1f}s（本地，0 token）"]
         if pl.get("truncated"):
             pl_bits.append("<b class='warn'>证据块超预算已降级</b>")
+        if pl.get("deep_forensics") == "skipped":
+            pl_bits.append("<b class='warn'>深度取证已跳过（capa/floss 未跑）</b>")
         if pl.get("skipped"):
             pl_bits.append("按类型未跑: " + "、".join(_esc(s) for s in pl["skipped"][:6]))
         usage_html += f"<div class='disp'>{' · '.join(pl_bits)}</div>"
@@ -514,6 +523,7 @@ def _file_row(r: FileReport, index: int) -> str:
                 data-degraded="{1 if rt.get('outcome') == 'degraded_to_rules' else 0}"
                 data-deepdive="{1 if au.get('deep_dive') else 0}"
                 data-preloaded="{1 if pl.get('tools') else 0}"
+                data-deepskipped="{1 if pl.get('deep_forensics') == 'skipped' else 0}"
                 data-text="{_esc(search_text.lower())}" data-idx="{index}">
               <td><code>{_esc(r.path)}</code>{error}</td>
               <td><span class="badge" style="background:{color}">{_esc(r.verdict.risk.value)}</span>
@@ -618,6 +628,13 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
                                                     key=lambda kv: -kv[1])))
         if preload["truncated"]:
             pl_bits.append(f"<b class='warn'>{preload['truncated']} 个文件的证据块超预算已降级</b>")
+        if preload.get("deep_skipped"):
+            # 分流·取证层：**必须在抬头就说**，否则"没报注入能力"会被读成"查过了没有"
+            pl_bits.append(
+                f"<b class='warn'>{preload['deep_skipped']} 个文件跳过深度取证"
+                f"（capa/floss 未跑，只给轻量证据）</b>"
+            )
+            pl_bits.append(f"深度取证已跑 {preload.get('deep_done', 0)} 个文件")
         usage_note += f"<div class='meta'>{' ｜ '.join(pl_bits)}</div>"
 
     trace_table = {"结论条数（AI 档）": ev["ai_claims"],                   "有工具出处": ev["attributed"],
@@ -737,6 +754,7 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
     <button data-risk="__degraded__" onclick="setRisk(this)">只看降级到规则</button>
     <button data-risk="__deepdive__" onclick="setRisk(this)">只看走了深挖</button>
     <button data-risk="__preloaded__" onclick="setRisk(this)">只看证据前置</button>
+    <button data-risk="__deepskipped__" onclick="setRisk(this)">只看跳过深度取证</button>
     <span class="dim" id="cnt"></span>
   </div>
   <table id="t">
@@ -769,6 +787,7 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
           : curRisk === '__retried__' ? r.getAttribute('data-retried') === '1'
           : curRisk === '__degraded__' ? r.getAttribute('data-degraded') === '1'
           : curRisk === '__deepdive__' ? r.getAttribute('data-deepdive') === '1'
+          : curRisk === '__deepskipped__' ? r.getAttribute('data-deepskipped') === '1'
           : curRisk === '__preloaded__' ? r.getAttribute('data-preloaded') === '1'
                                       : r.getAttribute('data-risk') === curRisk);
       var okExt = !curExt || r.getAttribute('data-ext') === curExt;

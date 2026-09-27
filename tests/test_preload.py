@@ -344,3 +344,154 @@ def test_report_summary_and_html_show_usage(tmp_path, monkeypatch, fake_tools):
     assert "纯读预采集证据" in text
     assert "确定性证据前置" in text or "预采集" in text
     assert "只看走了深挖" in text
+
+
+# ---------------------------------------------------------------- 5. 分流·取证层（B 档）
+
+def test_deep_false_drops_capa_and_floss(tmp_path, fake_tools):
+    """`deep=False` 时 capa/floss 从工具清单里摘掉（其余轻量证据照采）。"""
+    p = _write(tmp_path / "x.exe", b"MZ\x90\x00")
+    tools, _ = preload.plan_tools("pe", p, deep=False)
+    assert tools == ["signature_verify", "pe_analyze", "strings_ioc"]
+    assert not (set(tools) & set(preload.DEEP_FORENSICS_TOOLS))
+
+
+def test_deep_false_never_actually_runs_capa_or_floss(tmp_path, fake_tools):
+    p = _write(tmp_path / "x.exe", b"MZ\x90\x00")
+    preload.collect(p, "a" * 64, {"status": "unsigned"}, kind="pe", deep=False,
+                    score=5, threshold=12)
+    assert fake_tools, "轻量工具应该跑过"
+    assert "capa_scan" not in fake_tools and "floss_scan" not in fake_tools
+
+
+def test_deep_false_records_state_and_note(tmp_path, fake_tools):
+    """跳过必须**留痕**：报告里要能看出这次没跑深度取证。"""
+    p = _write(tmp_path / "x.exe", b"MZ\x90\x00")
+    result = preload.collect(p, "a" * 64, {}, kind="pe", deep=False, score=5, threshold=12)
+    assert result["deep_forensics"] == "skipped"
+    assert "深度取证已跳过" in result["deep_note"]
+    assert "5" in result["deep_note"] and "12" in result["deep_note"]   # 读数要写出来
+
+
+def test_deep_true_keeps_capa_and_floss(tmp_path, fake_tools):
+    p = _write(tmp_path / "x.exe", b"MZ\x90\x00")
+    tools, _ = preload.plan_tools("pe", p, deep=True)
+    assert "capa_scan" in tools and "floss_scan" in tools
+    result = preload.collect(p, "a" * 64, {}, kind="pe", deep=True)
+    assert result["deep_forensics"] == "done"
+    assert result["deep_note"] == ""
+
+
+@pytest.mark.parametrize("style,needle", [
+    ("policy", "已知的检测边界"),
+    ("invite", "不等于"),
+])
+def test_rendered_deep_skip_says_not_clean(tmp_path, fake_tools, monkeypatch, style, needle):
+    """送审里必须**明确**说：跳过 ≠ 通过。否则 AI 会把"没看到 capa 输出"读成"没发现问题"。
+
+    两种措辞档（`AI_AV_DEEP_SKIP_NOTE`）都必须做到这一点 —— 它们的区别只在
+    "要不要邀请 AI 补调"，**不是**在"要不要说清这是没跑"。
+    """
+    monkeypatch.setenv("AI_AV_DEEP_SKIP_NOTE", style)
+    p = _write(tmp_path / "x.exe", b"MZ\x90\x00")
+    result = preload.collect(p, "a" * 64, {}, kind="pe", deep=False, score=5, threshold=12)
+    text = preload.render_section(result)
+    assert "深度取证已跳过" in text
+    assert needle in text
+    assert "缺证据支撑" in text
+    # 声明必须排在**证据条目**前面（读的人先看到"缺了什么"）
+    assert text.index("深度取证已跳过") < text.index("▸ 来源工具")
+
+
+def test_deep_skip_note_style_env(monkeypatch):
+    monkeypatch.delenv("AI_AV_DEEP_SKIP_NOTE", raising=False)
+    assert preload._deep_skip_note_style() == "policy"
+    monkeypatch.setenv("AI_AV_DEEP_SKIP_NOTE", "invite")
+    assert preload._deep_skip_note_style() == "invite"
+    monkeypatch.setenv("AI_AV_DEEP_SKIP_NOTE", "whatever")
+    assert preload._deep_skip_note_style() == "policy"
+
+
+def test_deep_skip_note_not_mixed_with_type_not_applicable(tmp_path, fake_tools):
+    """分流跳过（有面但没采）与类型不适用（没有可分析的面）是两件事，不能混。"""
+    p = _write(tmp_path / "x.exe", b"MZ\x90\x00")
+    result = preload.collect(p, "a" * 64, {}, kind="pe", deep=False, score=5, threshold=12)
+    assert "capa_scan" not in " ".join(result["skipped"]), \
+        "分流跳过不该混进『与类型无关』清单（那会被读成『不适用』）"
+
+
+def test_non_pe_gets_no_deep_skip_note(tmp_path, fake_tools):
+    """非 PE 本来就不跑 capa/floss，那是"不适用"，不能写成分流跳过。"""
+    p = _write(tmp_path / "x.ps1", b"Write-Host hi")
+    result = preload.collect(p, "a" * 64, {}, kind="script", deep=False, score=5, threshold=12)
+    assert result["deep_forensics"] == "done"
+    assert result["deep_note"] == ""
+
+
+def test_collect_preload_passes_deep_flag(tmp_path, fake_tools):
+    """`scanner._collect_preload` 要把 deep/threshold 透传到采集层。"""
+    from aiav.models import PreliminaryEvidence
+
+    p = _write(tmp_path / "x.exe", b"MZ\x90\x00")
+    ev = PreliminaryEvidence(path=str(p), sha256="b" * 64, size=4, extension=".exe",
+                             prefilter_score=5)
+    result = _collect_preload(p, "b" * 64, ev, deep=False, threshold=12)
+    assert result["deep_forensics"] == "skipped"
+    assert "capa_scan" not in result["tools"]
+
+
+def test_preload_disabled_result_has_deep_fields(tmp_path, fake_tools, monkeypatch):
+    """关掉预采集时也要有**结构完整**的 deep 字段（不能是空对象）。"""
+    monkeypatch.setenv("AI_AV_PRELOAD", "0")
+    from aiav.models import PreliminaryEvidence
+
+    p = _write(tmp_path / "x.exe", b"MZ\x90\x00")
+    ev = PreliminaryEvidence(path=str(p), sha256="c" * 64, size=4, extension=".exe",
+                             prefilter_score=5)
+    result = _collect_preload(p, "c" * 64, ev)
+    assert result["policy"] == "disabled"
+    assert result["deep_forensics"] == "disabled" and "deep_note" in result
+
+
+def test_deep_evidence_threshold_env(monkeypatch):
+    """默认 0 = 不分流；非法值不炸。"""
+    monkeypatch.delenv("AI_AV_DEEP_EVIDENCE_THRESHOLD", raising=False)
+    assert preload.deep_evidence_threshold() == 0
+    monkeypatch.setenv("AI_AV_DEEP_EVIDENCE_THRESHOLD", "12")
+    assert preload.deep_evidence_threshold() == 12
+    monkeypatch.setenv("AI_AV_DEEP_EVIDENCE_THRESHOLD", "not-a-number")
+    assert preload.deep_evidence_threshold() == 0
+    monkeypatch.setenv("AI_AV_DEEP_EVIDENCE_THRESHOLD", "-3")
+    assert preload.deep_evidence_threshold() == 0
+
+
+def test_report_summary_and_html_show_deep_skip(tmp_path, monkeypatch, fake_tools):
+    """报告里必须看得见"跳过深度取证" —— 否则读报告的人会把"没报注入能力"读成"查过了没有"。"""
+    from aiav import scanner
+    from aiav.report import build_summary, write_reports
+
+    p = _write(tmp_path / "t.exe", b"MZ\x90\x01" + b"\x01" * 64)
+    monkeypatch.setenv("AI_AV_SIGNATURE_CHECK", "0")
+    monkeypatch.setenv("AI_AV_CACHE", "0")
+
+    def fake_analyze(agent, deps, evidence, budget=None, preload=None):
+        assert preload.get("deep_forensics") == "skipped"
+        return Verdict(risk=RiskLevel.clean, confidence=0.5, category="clean",
+                       summary="ok", evidence=["pe_analyze 显示导入表正常"])
+
+    monkeypatch.setattr(scanner, "analyze_file_with_agent", fake_analyze)
+    report = scanner.scan_file(p, agent=object(), ai_threshold=0, store=None,
+                               allow_unpack=False, allow_archives=False, cache=None,
+                               deep_evidence_threshold=12)
+
+    assert report.evidence_preload["deep_forensics"] == "skipped"
+    assert "capa_scan" not in report.evidence_preload["tools"]
+
+    summary = build_summary([report])
+    assert summary["preload"]["deep_skipped"] == 1
+    assert summary["preload"]["deep_done"] == 0
+
+    _json, html, _audit = write_reports([report], tmp_path / "out")
+    text = html.read_text(encoding="utf-8")
+    assert "跳过深度取证" in text
+    assert "只看跳过深度取证" in text

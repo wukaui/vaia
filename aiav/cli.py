@@ -64,6 +64,10 @@ def scan(
     max_size_mb: int = typer.Option(50, "--max-size-mb", help="跳过超过该大小的文件"),
     include_system: bool = typer.Option(False, "--include-system", help="不跳过 Windows/Program Files 等目录"),
     ai_threshold: int = typer.Option(5, "--ai-threshold", help="预筛分数达到多少才调用 Agent"),
+    deep_evidence_threshold: int = typer.Option(
+        0, "--deep-evidence-threshold",
+        help="分流·取证层：预筛分数低于它的文件只采轻量证据（PE 头/导入表/明文字符串/签名），"
+             "不跑 capa/floss。0=不分流（全部深挖）"),
     model: str | None = typer.Option(None, "--model", help="覆盖 AGENT_MODEL"),
     base_url: str | None = typer.Option(None, "--base-url", help="覆盖 AGENT_BASE_URL"),
     workers: int = typer.Option(4, "--workers", "-w", help="AI Agent 并发数"),
@@ -146,6 +150,7 @@ def scan(
                 files, agent_factory=agent_factory, ai_threshold=ai_threshold, workers=workers,
                 agent_samples=samples or None, budget=budget, store=store,
                 deterministic=not no_deterministic,
+                deep_evidence_threshold=deep_evidence_threshold,
             )
             progress.advance(task, len(files))
             for file_path, report in zip(files, reports):
@@ -158,7 +163,8 @@ def scan(
             for file_path in files:
                 report = scan_file(file_path, agent=agent, ai_threshold=ai_threshold,
                                    agent_samples=samples or None, budget=budget, store=store,
-                                   deterministic=not no_deterministic)
+                                   deterministic=not no_deterministic,
+                                   deep_evidence_threshold=deep_evidence_threshold)
                 reports.append(report)
                 progress.advance(task)
 

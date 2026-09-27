@@ -18,6 +18,7 @@ from aiav.models import FileReport, PreliminaryEvidence, RiskLevel, ScanDeps, Ve
 from aiav.preload import (
     ai_tool_calls,
     collect as collect_preload,
+    deep_evidence_threshold as preload_deep_threshold,
     detect_kind,
     preload_enabled,
     preload_tool_calls,
@@ -46,6 +47,7 @@ from aiav.tools import (
     signature_evidence,
     unavailable_detections,
 )
+from aiav.structural import structure_signals
 
 EICAR = rb"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 # EICAR 判定只认"文件本身就是测试标记"。真正的 EICAR 文件 68 字节；
@@ -359,6 +361,24 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False) -> Pr
                 reasons.append("疑似加壳: " + ", ".join(packing[:4]))
         except Exception:
             pass
+
+    # 确定性**结构**信号（2026-09-27）：段表/流表本身长得不对（小 stub + 大载荷、
+    # 可写可执行段、导入表稀疏、资源段占比异常、容器内嵌对象…）。全部本地可算、0 token。
+    #
+    # 动机（40 个 Dike pilot 实测）：补之前 35/40 个文件**同分 5**（那 5 分只来自
+    # 「高风险扩展名」），恶意与良性分布完全重合（AUC 0.625）—— 分数既不能分流，
+    # 也不能给 AI 提供任何信号。
+    #
+    # 每条理由都写成 `结构信号 +N: <事实>（<读数>）`，报告里能看出这条分是谁给的；
+    # 与上面 `pe_packing_signals`（加壳节名 / 高熵可执行段）**不是同一处证据**：
+    # 那边量的是"节名与熵"，这边量的是"原始数据分布与导入表形态"，不重复计分。
+    try:
+        struct_score, struct_reasons = structure_signals(path, ext)
+        if struct_score:
+            score += struct_score
+            reasons.extend(struct_reasons)
+    except Exception:  # noqa: BLE001 - 结构解析失败不影响其它信号
+        pass
 
     signature: dict = {}
     if with_signature:
@@ -984,20 +1004,24 @@ def _risk_rank(risk: RiskLevel) -> int:
     return {RiskLevel.clean: 0, RiskLevel.suspicious: 1, RiskLevel.malicious: 2}[risk]
 
 
-def _collect_preload(path: Path, sha256: str, evidence: PreliminaryEvidence) -> dict:
+def _collect_preload(path: Path, sha256: str, evidence: PreliminaryEvidence,
+                     deep: bool = True, threshold: int = 0) -> dict:
     """确定性证据前置的入口（可关：`AI_AV_PRELOAD=0` 退回"全靠 AI 自己调"）。
 
     关掉时也返回一份**结构完整**的结果 —— 报告里的 `evidence_preload` 不能因为
     "没采集"就变成空对象，那样读报告的人分不清"关掉了"和"采了但没东西"。
+
+    `deep=False` = 分流·取证层（B 档）：capa/floss 适用但按策略跳过，只采轻量证据。
     """
     if not preload_enabled():
         return {
             "kind": detect_kind(path), "tools": [], "entries": [], "calls": [],
             "skipped": ["全部工具（预采集已关闭：AI_AV_PRELOAD=0，证据由 AI 自己按需调用）"],
             "chars": 0, "elapsed_ms": 0.0, "truncated": False, "budget_note": "",
-            "policy": "disabled",
+            "policy": "disabled", "deep_forensics": "disabled", "deep_note": "",
         }
-    return collect_preload(path, sha256, evidence.signature)
+    return collect_preload(path, sha256, evidence.signature,
+                           deep=deep, score=evidence.prefilter_score, threshold=threshold)
 
 
 def merge_retry_infos(infos: list[dict]) -> dict:
@@ -1147,6 +1171,7 @@ def scan_file(
     cache: "ScanCache | None" = None,
     budget: TokenBudget | None = None,
     deterministic: bool = True,
+    deep_evidence_threshold: int | None = None,
 ) -> FileReport:
     """扫描单个文件。
 
@@ -1154,6 +1179,9 @@ def scan_file(
     （策略兜底 `enforce_policy` + 脱壳载荷抬升 + 压缩包最严者抬升），
     最终结论完全等于模型原始输出（壳内载荷/子样本仍会被扫描，只是不参与定级）。
     线上默认 `True`；消融实验靠它隔离"确定性层"的边际贡献，见 `docs/ABLATION.md`。
+
+    `deep_evidence_threshold` 是**分流·取证层**（2026-09-27）：预筛分数 < 它的文件
+    只采轻量证据，不跑 capa/floss。`None` 时读环境变量（默认 0 = 不分流，全部深挖）。
     """
     try:
         sha256 = compute_sha256(path)
@@ -1245,6 +1273,11 @@ def scan_file(
     evidence = quick_prefilter(
         path, sha256, with_signature=_signature_check_enabled(agent is not None)
     )
+
+    # 分流·取证层阈值（2026-09-27）：≤0 = 不分流（全部文件都跑 capa/floss，旧行为）。
+    # 由 `--deep-evidence-threshold` / `AI_AV_DEEP_EVIDENCE_THRESHOLD` 设定。
+    deep_threshold = (deep_evidence_threshold if deep_evidence_threshold is not None
+                      else preload_deep_threshold())
 
     # 确定层直接结案，不消耗 API（消融三档里都一样，实验单独统计短路文件数）。
     #
@@ -1346,7 +1379,8 @@ def scan_file(
                             continue
                         cr = scan_file(child, agent=agent, ai_threshold=ai_threshold, store=store,
                                        allow_unpack=True, agent_samples=samples, allow_archives=False,
-                                       budget=budget, deterministic=deterministic)
+                                       budget=budget, deterministic=deterministic,
+                                       deep_evidence_threshold=deep_threshold)
                         child_reports.append(cr)
                         archive_info["children"].append({
                             "name": child.name, "risk": cr.verdict.risk.value,
@@ -1377,7 +1411,11 @@ def scan_file(
             # 输出直接渲染进送审提示词，并原样进调用链（source=preload）供证据溯源。
             # 实测动机：旧口径平均 8.0 次工具调用/文件、2.3 万 token/文件，
             # 各工具调用率精确接近 1.00/文件 = 把工具清单从头到尾刷了一遍。
-            preload_result = _collect_preload(path, sha256, evidence)
+            preload_result = _collect_preload(
+                path, sha256, evidence,
+                deep=(deep_threshold <= 0 or evidence.prefilter_score >= deep_threshold),
+                threshold=deep_threshold,
+            )
             preload_calls = preload_tool_calls(preload_result)
             evidence_preload = {k: v for k, v in preload_result.items()
                                 if k not in ("entries", "calls")}
@@ -1476,6 +1514,7 @@ def scan_file(
         try:
             inner_path = Path(packing["unpack"]["output"])
             inner = scan_file(inner_path, agent=agent, ai_threshold=ai_threshold,
+                              deep_evidence_threshold=deep_threshold,
                               store=store, allow_unpack=False, agent_samples=samples,
                               budget=budget, deterministic=deterministic)
             packing["unpack"].update({
@@ -1614,6 +1653,7 @@ def scan_files_concurrent(
     budget: TokenBudget | None = None,
     store: "StateStore | None" = None,
     deterministic: bool = True,
+    deep_evidence_threshold: int | None = None,
 ) -> list[FileReport]:
     """并发扫描多个文件；每个线程使用独立 Agent，避免共享模型客户端。"""
     if not files:
@@ -1622,7 +1662,8 @@ def scan_files_concurrent(
     if workers <= 1 or agent_factory is None:
         agent = agent_factory() if agent_factory else None
         return [scan_file(p, agent, ai_threshold, agent_samples=agent_samples, budget=budget,
-                          store=store, deterministic=deterministic)
+                          store=store, deterministic=deterministic,
+                          deep_evidence_threshold=deep_evidence_threshold)
                 for p in files]
 
     local = threading.local()
@@ -1635,7 +1676,8 @@ def scan_files_concurrent(
                 local.agent = None
         return scan_file(path, getattr(local, "agent", None), ai_threshold,
                          agent_samples=agent_samples, budget=budget, store=store,
-                         deterministic=deterministic)
+                         deterministic=deterministic,
+                         deep_evidence_threshold=deep_evidence_threshold)
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
         return list(executor.map(work, files))

@@ -123,6 +123,39 @@ def preload_enabled() -> bool:
     return _env_flag("AI_AV_PRELOAD", "1")
 
 
+# ---- 「深挖」与「轻量」的分界（2026-09-27）------------------------------------
+# capa（能力识别）与 floss（解混淆串）是预采集里**最贵**的两项：实测单文件
+# capa 4.8~7.5s、floss 8.3~8.7s，且耗时与文件大小无关（大头是每次重新加载 15MB
+# 签名集与 floss 分析框架）。40 个 PE 的预采集地板因此是 242s（4 并发）。
+#
+# 分流·取证层（B 档）：只对**预筛分数 ≥ 分流阈值**的文件跑这两项，其余只给轻量证据
+# （PE 头/段表/导入表、明文字符串、签名状态）。前提是分数本身有区分度 ——
+# 否则这一步退化成"随机跳过"（见 docs/PREFILTER_STRUCTURE.md 的分数分布对照）。
+#
+# ⚠ 跳过的**措辞**与"类型不适用"完全不同：类型不适用是"对这个文件没有可分析的面"，
+# 这里是"**本该跑但按分流策略没跑**"——必须说清，否则 AI 会把"没看到 capa 输出"
+# 读成"capa 没发现问题"，那就是在信息缺失下判 clean。
+DEEP_FORENSICS_TOOLS = ("capa_scan", "floss_scan")
+
+
+def deep_evidence_threshold() -> int:
+    """分流·取证层阈值：预筛分数 ≥ 它才跑 capa/floss。**默认 0 = 不分流**（全部深挖）。
+
+    默认关掉是刻意的：这条会改变检出面的形状，必须由使用者显式开启
+    （`--deep-evidence-threshold 12` 或 `AI_AV_DEEP_EVIDENCE_THRESHOLD=12`）。
+    """
+    try:
+        return max(0, int(os.getenv("AI_AV_DEEP_EVIDENCE_THRESHOLD", "0")))
+    except ValueError:
+        return 0
+
+
+def _deep_skip_note_style() -> str:
+    """跳过的**措辞档**：`policy`（默认）/ `invite`。实测代价差一个数量级，见 collect 的注释。"""
+    raw = os.getenv("AI_AV_DEEP_SKIP_NOTE", "policy").strip().lower()
+    return "invite" if raw == "invite" else "policy"
+
+
 def _max_chars() -> int:
     try:
         return max(0, int(os.getenv("AI_AV_PRELOAD_MAX_CHARS", str(DEFAULT_MAX_CHARS))))
@@ -212,7 +245,7 @@ def _macro_storage_probe(path: Path) -> bool | None:
     return None
 
 
-def plan_tools(kind: str, path: Path) -> tuple[list[str], list[str]]:
+def plan_tools(kind: str, path: Path, deep: bool = True) -> tuple[list[str], list[str]]:
     """按文件类型挑工具，返回 (要跑的工具名, 跳过原因)。
 
     跳过原因会**写进送审**，不是静默省略 —— 但**措辞必须是"不适用"而不是"没跑"**。
@@ -225,6 +258,10 @@ def plan_tools(kind: str, path: Path) -> tuple[list[str], list[str]]:
     所以这里改成「与类型无关」+ 明确的"不必再调"，并在渲染时把这条规则说透
     （见 `render_section`）：**"没跑"（本机不可用）与"不适用"（类型对不上）是两回事** ——
     前者该告诉 AI（它也无能为力），后者告诉 AI 只会诱使它去补一个必然返回"不适用"的调用。
+
+    `deep=False`（分流·取证层）是**第三种**情况：capa/floss 对本文件**适用但按策略跳过**。
+    它既不能写成"不适用"（那是撒谎），也不能只丢进 skipped 清单（会被读成"跑了没问题"）——
+    由 `render_section` 单独用一段显式声明渲染，这里只把工具摘掉。
     """
     ext = path.suffix.lower()
     tools: list[str] = []
@@ -235,14 +272,17 @@ def plan_tools(kind: str, path: Path) -> tuple[list[str], list[str]]:
         # 签名证据块由预筛采（`quick_prefilter(with_signature=True)`），这里只渲染，
         # 不重复采集 —— 旧口径实测 signature_verify 1.88 次/文件，同一个文件验两遍。
         tools.append("signature_verify")
-        if capa_ready()[0]:
-            tools.append("capa_scan")
+        if not deep:
+            pass                       # capa/floss 由分流策略摘掉，见 collect 的 deep_note
         else:
-            skipped.append("capa_scan（本机不可用，见下方『未执行的检测』）")
-        if _find_exe("floss", env_var="FLOSS_EXE"):
-            tools.append("floss_scan")
-        else:
-            skipped.append("floss_scan（本机不可用，见下方『未执行的检测』）")
+            if capa_ready()[0]:
+                tools.append("capa_scan")
+            else:
+                skipped.append("capa_scan（本机不可用，见下方『未执行的检测』）")
+            if _find_exe("floss", env_var="FLOSS_EXE"):
+                tools.append("floss_scan")
+            else:
+                skipped.append("floss_scan（本机不可用，见下方『未执行的检测』）")
     elif kind == "script":
         tools += ["script_analyze", "strings_ioc"]
     elif kind == "ole":
@@ -320,8 +360,15 @@ def collect(
     sha256: str,
     signature: dict[str, Any] | None = None,
     kind: str | None = None,
+    deep: bool = True,
+    score: int | None = None,
+    threshold: int | None = None,
 ) -> dict[str, Any]:
     """本地采集确定性证据（0 token）。
+
+    `deep=False` = 分流·取证层：capa/floss 适用但按策略跳过，只采轻量证据。
+    跳过的原因与读数记在 `deep_forensics` / `deep_note` 里，由 `render_section`
+    渲染成一段**显式声明**（不能让 AI 把"没看到 capa 输出"读成"capa 没发现问题"）。
 
     返回：
       {
@@ -330,13 +377,57 @@ def collect(
         "entries": [{"tool": …, "payload": …}, …],            # 供送审渲染 + 证据溯源
         "skipped": ["script_analyze（… 不是脚本文本，按类型未跑）", …],
         "chars": 12345, "elapsed_ms": 210.5, "truncated": False,
+        "deep_forensics": "done" | "skipped",
+        "deep_note": "…",                                     # skipped 时的显式说明
       }
 
     `entries` 的 `payload` 就是工具返回给 AI 的原文（超预算时走结构化裁剪并留痕），
     原样写进 `deps.tool_calls` 就能被 `scanner.attribute_evidence` 对上。
     """
     kind = kind or detect_kind(path)
-    tools, skipped = plan_tools(kind, path)
+    tools, skipped = plan_tools(kind, path, deep=deep)
+
+    # 分流·取证层的留痕 + 送审声明。只在**确实适用却没跑**时才写 ——
+    # 非 PE 文件本来就不跑 capa/floss，那是"不适用"，不能混进这条。
+    deep_note = ""
+    deep_state = "done"
+    if not deep and kind == "pe":
+        deep_state = "skipped"
+        where = f"预筛分数 {score}" if score is not None else "预筛分数"
+        if threshold:
+            where += f" < 分流阈值 {threshold}"
+        # 两种措辞（`AI_AV_DEEP_SKIP_NOTE`）—— 2026-09-27 实测这两种的**代价完全不同**：
+        #   · `policy`（默认）：把跳过说成**既定分流口径**，并要求把它当成一条"已知的检测边界"
+        #     写进结论，明确不要再补调。40 样本实测：23 个被跳过的文件里 **0 个**去补调，
+        #     整轮 AI 自调工具 6~8 次、token 与 A 档同档。
+        #   · `invite`：说成"有具体怀疑点再自行补证"。实测 **8/23 个文件**去补调
+        #     capa/floss（其中 6 个是分数 9~11 的恶意，结构信号已经指向加壳），
+        #     AI 自调工具涨到 20~23 次、token 明显抬高 —— 分流的收益被补调吃掉了。
+        # 两种都**没有**把"没跑"说成"通过"（那是本项目的红线），区别只在"要不要邀请补调"。
+        if _deep_skip_note_style() == "invite":
+            deep_note = (
+                f"⚠ **深度取证已跳过**：本文件的 {where}，按分流策略未运行 "
+                f"{' / '.join(DEEP_FORENSICS_TOOLS)}（能力识别与解混淆串）。"
+                "本次只给了**轻量证据**（PE 头/段表、导入表、明文字符串、签名状态）。"
+                "这**不等于**这两项检测通过 —— 本文件的能力与解混淆串**尚未取得**，"
+                "任何『未发现注入/下载/持久化能力』的表述都缺证据支撑；"
+                "结论里必须写清『能力识别与解混淆串未做』这件事。"
+                "同时：**不要为了把清单补全而调用它们**（那会让这次分流白做）——"
+                "只有当你在**已有证据里指出一个具体的怀疑点**（例如段表/导入表/字符串"
+                "指向加壳、内存加载或注入）时，才自行调用 capa_scan / floss_scan 补证。"
+            )
+        else:
+            deep_note = (
+                f"⚠ **深度取证已跳过（既定分流口径，不是信息缺失）**：本文件的 {where}，"
+                f"按分流策略未运行 {' / '.join(DEEP_FORENSICS_TOOLS)}（能力识别与解混淆串）。"
+                "本次只给了**轻量证据**（PE 头/段表、导入表、明文字符串、签名状态）。"
+                "请把这一点当成一条**已知的检测边界**："
+                "『能力识别与解混淆串本次未做（分流策略）』**必须**出现在你的结论里；"
+                "任何『未发现注入/下载/持久化能力』的表述都缺证据支撑。"
+                "同时：**不要调用 capa_scan / floss_scan 去补** —— 这是本次分流的既定口径，"
+                "补调等于把分流作废（实测补调一次就是多一整个模型往返 ≈ 多 5k token）。"
+                "请只依据上面已给的证据下结论，并把不确定的部分说成不确定。"
+            )
 
     started = time.monotonic()
     entries: list[dict[str, Any]] = []
@@ -405,6 +496,8 @@ def collect(
         "truncated": budget_note is not None,
         "budget_note": budget_note or "",
         "policy": "by_type",
+        "deep_forensics": deep_state,
+        "deep_note": deep_note,
     }
 
 
@@ -454,10 +547,14 @@ def render_section(result: dict[str, Any]) -> str:
     if not result or not result.get("entries"):
         # 空结果也要**显式说明为什么空**（关掉了 / 预算裁光了），不能留白让 AI 以为"没证据"
         if result and result.get("budget_note"):
-            return f"（本次未预采集确定性证据：{result['budget_note']}）"
-        if result and result.get("policy") == "disabled":
-            return "（本次未做确定性证据前置：预采集被显式关闭，证据需要你自己调工具取）"
-        return "（本次未预采集确定性证据）"
+            head = f"（本次未预采集确定性证据：{result['budget_note']}）"
+        elif result and result.get("policy") == "disabled":
+            head = "（本次未做确定性证据前置：预采集被显式关闭，证据需要你自己调工具取）"
+        else:
+            head = "（本次未预采集确定性证据）"
+        if result and result.get("deep_note"):
+            head += "\n  " + str(result["deep_note"])
+        return head
 
     lines = [
         "【确定性证据（本地预采集 · 事实，不是判断）】",
@@ -466,6 +563,11 @@ def render_section(result: dict[str, Any]) -> str:
         "没有预筛分数、没有 strong/weak 分档。怎么解读由你决定。",
         "按文件类型挑工具（%s），每项标注来源工具名，可直接用于证据溯源。" % result.get("kind", "?"),
     ]
+    # ⚠ 分流·取证层的声明必须**放在最前面**、且与"类型不适用"分开说 ——
+    # 两件事在送审里长得很像，但语义相反：一个是"没有可分析的面"，一个是"有面但没采"。
+    if result.get("deep_note"):
+        lines.append("")
+        lines.append("  " + str(result["deep_note"]).replace("\n", "\n  "))
     for entry in result["entries"]:
         lines.append("")
         lines.append(f"  ▸ 来源工具: {entry['tool']}")
