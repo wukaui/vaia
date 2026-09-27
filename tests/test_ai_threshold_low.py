@@ -243,7 +243,8 @@ def test_report_summary_separates_the_two_tiers(tmp_path, monkeypatch) -> None:
     assert s["gate"] == 300 and s["gate_low"] == 225
     assert s["sent_high"] == 1 and s["sent_low"] == 3
     assert s["sent"] == 4 and s["send_rate"] == 0.8
-    assert s["ai_tiers"] == {"high": 1, "low": 3, "none": 1}
+    assert s["ai_tiers"] == {"high": 1, "low": 3, "triage": 0, "none": 1}
+    assert s["sent_triage"] == 0
     assert s["low_tier"]["files"] == 3 and s["low_tier"]["ai_files"] == 3
     assert s["low_tier"]["flagged"] == 2
     assert s["low_tier"]["confidence_mean"] == round((0.62 + 0.42 + 0.71) / 3, 3)

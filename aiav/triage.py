@@ -752,6 +752,37 @@ class TriageClient:
 
 
 # ---------------------------------------------------------------- 单文件入口
+def triage_cached(
+    path: Path,
+    sha256: str,
+    client: TriageClient,
+    http: httpx.Client | None = None,
+    max_prompt_tokens: int = TARGET_PROMPT_TOKENS,
+    cache: Any | None = None,
+    samples: int = 1,
+) -> dict[str, Any]:
+    """单文件初筛 + 缓存（**缓存口径只在这一处**）。
+
+    命中 `TriageCache` 就不重算（同 sha256 + 同模型 + 同摘要版本），`from_cache=True`
+    原样写进结果。流水线（`scanner`）与脚本（`run_batch`）都走这个函数 ——
+    两边各写一份缓存判断，就会出现"脚本吃了缓存、流水线没吃"这种只在一条路径上
+    复现的差异（与 `TriageClient` 构造只留一处是同一类理由）。
+    """
+    if cache is not None:
+        hit = cache.get_triage(sha256, model=client.model, samples=samples)
+        if hit:
+            record = dict(hit["result"])
+            record["from_cache"] = True
+            record["path"] = str(path)
+            record["name"] = path.name
+            return record
+    record = triage_one(path, sha256, client, http=http,
+                        max_prompt_tokens=max_prompt_tokens)
+    if cache is not None and record["ok"]:
+        cache.put_triage(sha256, record, model=client.model, samples=samples)
+    return record
+
+
 def triage_one(
     path: Path,
     sha256: str,
@@ -804,7 +835,7 @@ def run_batch(
 ) -> list[dict[str, Any]]:
     """并发跑一批。**只做静态读取**：不执行样本、不上传、不落地。
 
-    缓存口径：命中 `TriageCache` 就不重算（同 sha256 + 同模型 + 同摘要版本），
+    缓存口径见 `triage_cached`（唯一一处）：命中 `TriageCache` 就不重算，
     `from_cache=True` 原样写进结果 —— 报告里能分开"这次真跑了"和"吃了缓存"。
     """
     items = list(items)
@@ -820,19 +851,9 @@ def run_batch(
     ) as shared:
         def bound(item: tuple[Path, str]) -> dict[str, Any]:
             path, sha256 = item
-            if cache is not None:
-                hit = cache.get_triage(sha256, model=client.model, samples=samples)
-                if hit:
-                    record = dict(hit["result"])
-                    record["from_cache"] = True
-                    record["path"] = str(path)
-                    record["name"] = path.name
-                    return record
-            record = triage_one(path, sha256, client, http=shared,
-                                max_prompt_tokens=max_prompt_tokens)
-            if cache is not None and record["ok"]:
-                cache.put_triage(sha256, record, model=client.model, samples=samples)
-            return record
+            return triage_cached(path, sha256, client, http=shared,
+                                 max_prompt_tokens=max_prompt_tokens,
+                                 cache=cache, samples=samples)
 
         with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
             for record in pool.map(bound, items):

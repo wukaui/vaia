@@ -138,7 +138,7 @@ def build_summary(reports: list[FileReport]) -> dict[str, Any]:
     def _tier_of(r: FileReport) -> str:
         det_r = r.deterministic or {}
         tier = det_r.get("ai_tier")
-        if tier in ("high", "low", "none"):
+        if tier in ("high", "low", "triage", "none"):
             return str(tier)
         if det_r.get("disposition") == "send_ai" or r.agent_used:
             return "high" if int(r.prefilter_score or 0) >= gate else "low"
@@ -152,6 +152,23 @@ def build_summary(reports: list[FileReport]) -> dict[str, Any]:
     low_conf = [round(float(r.verdict.confidence), 3) for r in low_ai]
     low_degraded = [r for r in low_ai
                     if (r.agent_retry or {}).get("outcome") == "degraded_to_rules"]
+
+    # ---- ②层 LLM 初筛的账（2026-09-27 接进流水线）----
+    # 三类：`select`（初筛说值得看 → 送 ③）/ `drop`（初筛说算了 → 静默放行）/
+    # `none`（没跑 / 没拿到分数）。**没拿到分数不许记成 drop** ——
+    # 那会把一次调用故障伪装成一个判定（口径与 `criteria.triage_tier` 一致）。
+    triage_rows = [(r, (r.deterministic or {}).get("triage") or {}) for r in reports]
+    triage_cand = [r for r, t in triage_rows if t.get("candidate")]
+    triage_select = [r for r, t in triage_rows if t.get("tier") == "select"]
+    triage_drop = [r for r, t in triage_rows if t.get("tier") == "drop"]
+    triage_no_score = [r for r, t in triage_rows
+                       if t.get("candidate") and t.get("score") is None]
+    triage_ai = [r for r in triage_select if r.agent_used]
+    triage_flagged = [r for r in triage_ai
+                      if r.verdict.risk in (RiskLevel.suspicious, RiskLevel.malicious)]
+    triage_batch = next(((r.deterministic or {}).get("triage_batch") for r in reports
+                         if (r.deterministic or {}).get("triage_batch")), None)
+    triage_enabled_any = any(t.get("enabled") for _r, t in triage_rows)
     # ⚠️ 送审率看的是**①层处置**（send_ai），不是 `agent_used`。
     # `--no-ai` 跑的时候 `agent_used` 永远是 False —— 拿它当送审率会得到 0% 这种假数
     # （踩过一次：40 个文件里 13 个该送审，卡片上写着 0.0%）。
@@ -173,9 +190,25 @@ def build_summary(reports: list[FileReport]) -> dict[str, Any]:
             "gate": gate,
             # 低档闸门与三档计数（两档送审，2026-09-27）。`gate_low=0` = 低档关掉。
             "gate_low": gate_low,
-            "ai_tiers": {k: tiers.get(k, 0) for k in ("high", "low", "none")},
+            "ai_tiers": {k: tiers.get(k, 0) for k in ("high", "low", "triage", "none")},
             "sent_high": tiers.get("high", 0),
             "sent_low": tiers.get("low", 0),
+            # ②层挑出来送 ③ 的（**预筛分没到闸门**，靠初筛进来的）——
+            # 与高档/低档并列成第三类送审，否则这些文件在报告里会被读成"未结案"。
+            "sent_triage": tiers.get("triage", 0),
+            "triage": {
+                "enabled": triage_enabled_any,
+                "batch": triage_batch,
+                "candidates": len(triage_cand),
+                "selected": len(triage_select),
+                "dropped": len(triage_drop),
+                "no_score": len(triage_no_score),
+                "ai_files": len(triage_ai),
+                "flagged": len(triage_flagged),
+                "entry_gate": (triage_batch or {}).get("entry_gate"),
+                "threshold": (triage_batch or {}).get("threshold"),
+                "model": (triage_batch or {}).get("model"),
+            },
             # 低档这一档的**可读账**：送了多少、AI 真判了几个、判 flag 几个、
             # AI 给的置信度（均值/区间）。目的就一个：让"AI 也看过这一档"有痕迹，
             # 而不是静默放行 —— 这是两档送审唯一容易被读错的地方。
@@ -735,13 +768,21 @@ def _file_row(r: FileReport, index: int) -> str:
     # 送审档（两档送审，2026-09-27）：逐行把"这个文件走的是哪一档"写出来 ——
     # 低档送审的文件在旧口径下是"未结案"，报告里必须一眼能分出来它其实**送过 AI**。
     tier = (r.deterministic or {}).get("ai_tier")
-    if tier not in ("high", "low", "none"):
+    if tier not in ("high", "low", "triage", "none"):
         tier = ("high" if r.agent_used or (r.deterministic or {}).get("disposition") == "send_ai"
                 else "none")
-    tier_label = {"high": "高档送审", "low": "低档送审", "none": "未送（静默）"}[tier]
+    triage_info = (r.deterministic or {}).get("triage") or {}
+    tier_label = {"high": "高档送审", "low": "低档送审",
+                  "triage": f"初筛送审（{triage_info.get('score')} 分）",
+                  "none": "未送（静默）"}[tier]
     tier_html = ({"high": "<span style='color:#555'>高档送审</span>",
                   "low": "<b style='color:#ef6c00'>低档送审</b>",
-                  "none": "<span class='dim'>未送（静默）</span>"}[tier])
+                  "triage": (f"<b style='color:#6a1b9a'>初筛送审</b>"
+                             f"<span class='dim'>（初筛 {triage_info.get('score')}/100 · "
+                             f"门槛 {triage_info.get('threshold')}）</span>"),
+                  "none": ("<span class='dim'>未送（静默"
+                           + (f"·初筛 {triage_info.get('score')} 未达门槛"
+                              if triage_info.get("tier") == "drop" else "") + "）</span>")}[tier])
     # 置信度这一列：走 AI 的是**模型给的**置信度；没走 AI 的是规则兜底那几条
     # （0.65/0.75 这种常量），必须标出来 —— 否则读报告的人会把规则置信度当成 AI 置信度。
     conf_cell = (f"{r.verdict.confidence:.2f}" if r.agent_used
@@ -758,6 +799,7 @@ def _file_row(r: FileReport, index: int) -> str:
                 data-preloaded="{1 if pl.get('tools') else 0}"
                 data-deepskipped="{1 if pl.get('deep_forensics') == 'skipped' else 0}"
                 data-tier="{tier}"
+                data-triagecand="{1 if triage_info.get('candidate') else 0}"
                 data-text="{_esc(search_text.lower())}" data-idx="{index}">
               <td><code>{_esc(r.path)}</code>{error}</td>
               <td><span class="badge" style="background:{color}">{_esc(r.verdict.risk.value)}</span>
@@ -935,6 +977,24 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
            "这批数字按核验铁律作废。</b>" if det["files_with_unclassified_signals"] else "")
         + "</div>")
     det_note += low_note
+    triage = det.get("triage") or {}
+    if triage.get("enabled"):
+        # ②层的抬头账：候选/选中/放行/没拿到分数，与它挑出来之后 ③ 判成什么。
+        triage_note = (
+            "<div class='meta'><b>②层 LLM 初筛</b>：入口 <b>≥"
+            f"{triage.get('entry_gate')}</b>（未结案）· 门槛 <b>{triage.get('threshold')}</b> · "
+            f"模型 <code>{_esc(str(triage.get('model') or ''))}</code> —— "
+            f"候选 <b>{triage.get('candidates', 0)}</b> 个 → 选中送 ③ "
+            f"<b>{triage.get('selected', 0)}</b> 个（其中 ③ 真判了 {triage.get('ai_files', 0)} 个、"
+            f"判 flag {triage.get('flagged', 0)} 个）· 未达门槛静默放行 "
+            f"{triage.get('dropped', 0)} 个 · <b>没拿到分数 {triage.get('no_score', 0)} 个</b>"
+            "（没拿到分数 <b>不算没过门槛</b> —— 那是调用故障，不是判定）。"
+            "⚠️ <b>送审率 ≠ 误报率</b>：初筛只回答『值不值得花钱看』，"
+            "判白是 ③ 深度 AI 的事。</div>")
+    else:
+        triage_note = ("<div class='meta'>②层 LLM 初筛：<b>这一轮没开</b>"
+                       "（默认关；打开用 <code>--triage</code> 或 <code>AI_AV_TRIAGE=1</code>）。</div>")
+    det_note += triage_note
     unavailable = det.get("unavailable_detections") or []
     unavailable_note = (
         "<div class='meta'><b>未安装 / 未配置的检测项（这些判据在本批里是空的，不是『跑了没问题』）：</b>"
@@ -1016,6 +1076,7 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
     {_card("送审率", f"{det['send_rate']*100:.1f}%", "#c62828")}
     {_card("高档送审", det.get('sent_high', 0), "#c62828")}
     {_card("低档送审（也送 AI）", det.get('sent_low', 0), "#ef6c00")}
+    {_card("初筛选中送 ③", det.get('sent_triage', 0), "#6a1b9a")}
     {_card("①层结案率", f"{det['closed_rate']*100:.1f}%", "#2e7d32")}
     {_card("确定性判恶意", det["closed_malicious"], "#c62828")}
     {_card("确定性判干净", det["closed_clean"], "#2e7d32")}
@@ -1069,7 +1130,9 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
     <button data-risk="__preloaded__" onclick="setRisk(this)">只看证据前置</button>
     <button data-risk="__deepskipped__" onclick="setRisk(this)">只看跳过深度取证</button>
     <button data-risk="__lowtier__" onclick="setRisk(this)">只看低档送审</button>
-    <button data-risk="__highorlow__" onclick="setRisk(this)">只看送过 AI（两档）</button>
+    <button data-risk="__triagetier__" onclick="setRisk(this)">只看初筛送审</button>
+    <button data-risk="__triagecand__" onclick="setRisk(this)">只看跑过初筛</button>
+    <button data-risk="__highorlow__" onclick="setRisk(this)">只看送过 AI（三档）</button>
     <span class="dim" id="cnt"></span>
   </div>
   <table id="t">
@@ -1105,6 +1168,8 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
           : curRisk === '__deepskipped__' ? r.getAttribute('data-deepskipped') === '1'
           : curRisk === '__preloaded__' ? r.getAttribute('data-preloaded') === '1'
           : curRisk === '__lowtier__' ? r.getAttribute('data-tier') === 'low'
+          : curRisk === '__triagetier__' ? r.getAttribute('data-tier') === 'triage'
+          : curRisk === '__triagecand__' ? r.getAttribute('data-triagecand') === '1'
           : curRisk === '__highorlow__' ? r.getAttribute('data-tier') !== 'none'
                                       : r.getAttribute('data-risk') === curRisk);
       var okExt = !curExt || r.getAttribute('data-ext') === curExt;

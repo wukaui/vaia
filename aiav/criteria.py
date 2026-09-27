@@ -95,6 +95,57 @@ AI_GATE = SUSPICIOUS_SCORE
 #: 每一档换回来的都是"一堆良性"。判据分数一个都没动 —— 动的只是"多少分才值得送审"。
 AI_GATE_LOW = 225
 
+#: **LLM 初筛门槛**（2026-09-27，接进流水线那一轮）：初筛分达到它就送深度 AI。
+#:
+#: 60 是**算出来的**（报告第十一节 11.5，Dike 400 灰区 158 个实测）：约束
+#: "良性送审率 ≤10%"，在这个约束下召回最高的那一点 —— 门槛 60 → 灰区良性送审 8.4%、
+#: 灰区召回 73.3%；50 会让良性送审涨到 19.0%（换 4/6 召回），70 只剩 2.2%（也是 2/6）。
+#: 换语料要重算，别照搬。
+TRIAGE_GATE = 60
+
+#: **初筛入口**（2026-09-27 新增）：预筛分落在 `[TRIAGE_ENTRY_GATE, AI_GATE)` 且**未结案**的
+#: 文件才进 LLM 初筛。默认 125 = 判据刻度的**弱信号档下界**（`HIGH_RISK_EXTENSION`
+#: 单条 = `5 * SIGNAL_UNIT` = 125）。
+#:
+#: 为什么入口放在这儿（先验理由，不是看结果定的）：
+#:   · **≥ 深度 AI 闸门**（默认 300，本轮跑 200）由规则直送 —— 规则已经说"值得看"，
+#:     再拿初筛去筛它只会多花钱、还可能把规则说可疑的文件筛掉；
+#:   · **125~199** 是"规则分不开、门槛也分不开"的灰区（Dike 上 6 恶 vs 137 良，
+#:     恶良性命中的是同一条判据 `HIGH_RISK_EXTENSION`）—— 这一档只能靠"看内容"分，
+#:     正是初筛要说话的地方；
+#:   · **< 125** 判据一条都没复合出来，初筛要真花钱，无信号档不烧。
+#: `0` = 入口不设下界（任何未结案文件都能进初筛），`>= 深度 AI 闸门` = 初筛永不触发。
+TRIAGE_ENTRY_GATE = 125
+
+
+def effective_triage_entry_gate(entry_gate: int, gate: int) -> int:
+    """把初筛入口归一成一条下界（与 `effective_low_gate` 同一类归一，只此一处）。
+
+    `entry_gate <= 0`  = 入口不设下界（0 分以上都能进初筛）；
+    `entry_gate >= gate` = 初筛被关在深度 AI 闸门之外（等价于"不触发初筛"）。
+    """
+    if entry_gate <= 0:
+        return 0
+    return min(int(entry_gate), int(gate))
+
+
+def is_triage_candidate(score: int, *, gate: int = AI_GATE,
+                        entry_gate: int = TRIAGE_ENTRY_GATE) -> bool:
+    """这个**未结案**的预筛分数该不该进 LLM 初筛。
+
+    `gate` 是深度 AI 闸门（≥它的文件直送 ③，不过初筛）；`entry_gate` 是初筛入口。
+    结案与否**不在这里判断** —— 结案是 `decide()` 的事，调用方只在未结案的文件上问。
+    """
+    return effective_triage_entry_gate(entry_gate, gate) <= int(score) < int(gate)
+
+
+def triage_tier(score: int | None, *, threshold: int = TRIAGE_GATE) -> str:
+    """初筛结果由哪一档处置：`select`（≥门槛，送 ③）/ `drop`（<门槛，静默放行）/
+    `none`（没跑初筛 / 没拿到分数 —— **没拿到分数不许当成"没过门槛"**）。"""
+    if score is None:
+        return "none"
+    return "select" if int(score) >= int(threshold) else "drop"
+
 
 def effective_low_gate(gate: int, gate_low: int) -> int:
     """把两个闸门归一成一条路由用的下界。
@@ -1055,11 +1106,16 @@ __all__ = [
     "Direction",
     "SIGNAL_UNIT",
     "STRONG_FLOOR",
+    "TRIAGE_ENTRY_GATE",
+    "TRIAGE_GATE",
     "ai_tier",
     "band_label",
     "classify_reason",
     "decide",
     "effective_low_gate",
+    "effective_triage_entry_gate",
+    "is_triage_candidate",
+    "triage_tier",
     "raw_weight_of",
     "score_hits",
     "update_stats",

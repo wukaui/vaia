@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from rich.table import Table
 
 from aiav.agent import build_agent
 from aiav.budget import budget_from_env
-from aiav.criteria import AI_GATE, AI_GATE_LOW
+from aiav.criteria import AI_GATE, AI_GATE_LOW, TRIAGE_ENTRY_GATE, TRIAGE_GATE
 from aiav.capa_data import capa_ready_or_note
 from aiav.disposition import QUARANTINE_RISKS, StateStore, default_store
 from aiav.models import RiskLevel
@@ -51,6 +52,14 @@ def _store(state_dir: Path | None) -> StateStore:
     return StateStore(state_dir) if state_dir else default_store()
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    """读一个布尔环境变量（`1/true/yes/on` 为真）。与 `preload_enabled` 同款口径。"""
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 @app.callback()
 def main() -> None:
     """轻量级 AI 恶意文件扫描 Agent。"""
@@ -86,8 +95,25 @@ def scan(
         help="分流·取证层：预筛分数低于它的文件只采轻量证据（PE 头/导入表/明文字符串/签名），"
              "不跑 capa/floss。0=不分流（全部深挖）。单位是 Assemblyline 刻度，"
              "300 = 老口径的 12"),
+    triage: bool = typer.Option(
+        False, "--triage/--no-triage",
+        help="②层 **LLM 初筛**（2026-09-27 接进流水线）：未结案、且预筛分落在"
+             "[初筛入口, 深度 AI 闸门) 的文件，先喂**最小摘要**给便宜档模型拿 0~100 分；"
+             "达到门槛的才进 ③ 深度 AI。默认关 —— 这一层要真花钱，必须显式打开"
+             "（也可以用 AI_AV_TRIAGE=1）。"),
+    triage_threshold: int = typer.Option(
+        TRIAGE_GATE, "--triage-threshold",
+        help="初筛门槛：初筛分达到它才送 ③ 深度 AI。默认 60 —— Dike 400 灰区上**算出来**的"
+             "（约束「良性送审 ≤10%」下召回最高，见报告 11.5）。换语料要重算。"),
+    triage_entry_gate: int = typer.Option(
+        TRIAGE_ENTRY_GATE, "--triage-entry-gate",
+        help="初筛入口：预筛分 ≥ 它（且未结案）才进初筛。默认 125 = 判据刻度弱信号档下界"
+             "（单条 HIGH_RISK_EXTENSION）。≥ 深度 AI 闸门的分由规则直送、不过初筛。"),
     model: str | None = typer.Option(None, "--model", help="覆盖 AGENT_MODEL"),
     base_url: str | None = typer.Option(None, "--base-url", help="覆盖 AGENT_BASE_URL"),
+    triage_model: str | None = typer.Option(
+        None, "--triage-model",
+        help="初筛那一层的模型（**应该是便宜档**）；不传用 AGENT_MODEL"),
     workers: int = typer.Option(4, "--workers", "-w", help="AI Agent 并发数"),
     quarantine: str = typer.Option(
         "off", "--quarantine", help="处置闭环：off / malicious / suspicious（要把哪些判定的文件移入隔离区）"),
@@ -140,6 +166,27 @@ def scan(
                       f"<{ai_threshold_low} 静默放行[/cyan]")
     else:
         console.print(f"[cyan]送审闸门：单档 ≥{ai_threshold}（低档已关闭）[/cyan]")
+
+    # ---- ②层 LLM 初筛（2026-09-27）----
+    # 配置来源优先级：显式 `--triage` > 环境变量 `AI_AV_TRIAGE`。默认关。
+    # 为什么默认关：这一层要真花钱，而且"打开它"本身就是一次实验设计决定 ——
+    # 静默开启会让所有既有复现命令的成本变样。
+    triage_on = bool(triage) or _env_flag("AI_AV_TRIAGE", False)
+    triage_client = None
+    if triage_on and agent is not None:
+        try:
+            from aiav.triage import TriageClient
+
+            triage_client = TriageClient(model=triage_model, base_url=base_url)
+            console.print(
+                f"[cyan]②层 LLM 初筛已启用：{triage_client.model} · "
+                f"入口 ≥{triage_entry_gate}（未结案）· 门槛 {triage_threshold} · "
+                f"≥{ai_threshold} 由规则直送、不过初筛[/cyan]")
+        except Exception as exc:  # noqa: BLE001 - 初筛起不来不该让整轮扫描跑不起来
+            console.print(f"[yellow]②层 LLM 初筛未启用（{type(exc).__name__}: {exc}）[/yellow]")
+    elif triage_on:
+        console.print("[yellow]②层 LLM 初筛已请求，但没有可用的深度 AI Agent —— 跳过[/yellow]")
+
     if skip_stats:
         skipped = sum(skip_stats.values())
         detail = "、".join(f"{k} {v}" for k, v in sorted(skip_stats.items()))
@@ -211,6 +258,10 @@ def scan(
                 deep_evidence_threshold=deep_evidence_threshold,
                 clamav_batch=clamav_batch,
                 ai_threshold_low=ai_threshold_low,
+                triage_enabled=triage_client is not None,
+                triage_threshold=triage_threshold,
+                triage_entry_gate=triage_entry_gate,
+                triage_client=triage_client,
             )
             progress.advance(task, len(files))
             for file_path, report in zip(files, reports):
@@ -226,7 +277,11 @@ def scan(
                                    deterministic=not no_deterministic,
                                    deep_evidence_threshold=deep_evidence_threshold,
                                    clamav_batch=clamav_batch,
-                                   ai_threshold_low=ai_threshold_low)
+                                   ai_threshold_low=ai_threshold_low,
+                                   triage_enabled=triage_client is not None,
+                                   triage_threshold=triage_threshold,
+                                   triage_entry_gate=triage_entry_gate,
+                                   triage_client=triage_client)
                 reports.append(report)
                 progress.advance(task)
 
@@ -239,6 +294,20 @@ def scan(
     extra: dict = {}
     if budget is not None:
         extra["token_budget"] = budget.as_dict()
+    if triage_client is not None:
+        # ②层的批次账（候选/跑了/失败/吃缓存/选中）—— 从第一个报告上取回，
+        # `scan_files_concurrent` 把同一份统计挂在每个报告上。
+        batch_stats = next((r.deterministic.get("triage_batch") for r in reports
+                            if r.deterministic.get("triage_batch")), None)
+        if batch_stats:
+            extra["triage"] = batch_stats
+            console.print(
+                f"[cyan]②层初筛：候选 {batch_stats['candidates']} · 跑了 {batch_stats['ran']}"
+                f"（缓存 {batch_stats['from_cache']} / 失败 {batch_stats['failed']}）· "
+                f"选中送 ③ {batch_stats['selected']}[/cyan]")
+            if batch_stats["failed"]:
+                console.print(f"[red]⚠️ 初筛失败 {batch_stats['failed']} 个"
+                              f"（按核验铁律要单独看：失败不许当成『没过门槛』）[/red]")
     if skip_stats:
         # 口径可查：报告里能看出"总数"之外还有多少东西被跳过了、为什么
         extra["scan_skips"] = {

@@ -189,12 +189,21 @@ def test_no_criterion_scores_into_the_conclusive_band_by_accident():
 
 
 def _emitted_reasons() -> list[tuple[str, str]]:
-    """扫产出方源码，把每一处 `reasons.append(...)` 的第一个字符串字面量捞出来。"""
+    """扫产出方源码，把每一处 `reasons.append(...)` 的第一个字符串字面量捞出来。
+
+    行尾带 `# noqa: unscored-reason` 的跳过：那是**说明性**理由（例如 ②层 LLM 初筛
+    "挑出来送深度 AI"），它**不加分、不进判据表**，被当成幽灵分来查是误报。
+    """
     out: list[tuple[str, str]] = []
     pattern = re.compile(r"reasons\.append\(\s*(f?)(\"\"\"|'''|\"|')(.*?)\2", re.S)
     for path in sorted((REPO / "aiav").glob("*.py")):
         text = path.read_text(encoding="utf-8")
-        for m in pattern.finditer(text):
+        for line in text.splitlines():
+            if "noqa: unscored-reason" in line:
+                continue
+            m = pattern.search(line)
+            if not m:
+                continue
             literal = m.group(3)
             if literal.startswith("#"):
                 continue
