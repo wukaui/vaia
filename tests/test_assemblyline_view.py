@@ -234,3 +234,20 @@ def test_catalog_has_the_three_tiers():
 def test_service_tool_version_is_not_empty():
     assert len(service_tool_version()) > 10
     assert Path("/tmp").exists()
+
+
+def test_send_rate_counts_disposition_not_agent_used():
+    """`--no-ai` 跑的时候 `agent_used` 全是 False —— 送审率必须看①层处置，
+    否则卡片上会写 0%，而 dispositions 里明明有 13 个 send_ai（踩过一次）。"""
+    reports = [
+        _report(deterministic={"disposition": "send_ai"}, agent_used=False),
+        _report(deterministic={"disposition": "send_ai"}, agent_used=False),
+        _report(deterministic={"disposition": "pass"}, agent_used=False),
+        _report(deterministic={"disposition": "closed_clean"}, agent_used=False),
+    ]
+    sub = build_submission(reports)
+    assert sub["deterministic"]["send_rate"] == 0.5
+
+    from aiav.report import build_summary
+
+    assert build_summary(reports)["deterministic"]["send_rate"] == 0.5

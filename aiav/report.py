@@ -115,7 +115,11 @@ def build_summary(reports: list[FileReport]) -> dict[str, Any]:
     #   未结案率     = 没线索、不送 AI、也没结论（⚠️ 不是判白）
     n = len(reports) or 1
     dispositions = Counter((r.deterministic or {}).get("disposition") or "unknown" for r in reports)
-    sent = sum(1 for r in reports if r.agent_used)
+    # ⚠️ 送审率看的是**①层处置**（send_ai），不是 `agent_used`。
+    # `--no-ai` 跑的时候 `agent_used` 永远是 False —— 拿它当送审率会得到 0% 这种假数
+    # （踩过一次：40 个文件里 13 个该送审，卡片上写着 0.0%）。
+    sent = sum(1 for r in reports
+               if (r.deterministic or {}).get("disposition") == "send_ai" or r.agent_used)
     unclassified = [r for r in reports if r.unclassified_signals]
     criteria_fired = Counter(
         h.get("heur_id", "?") for r in reports for h in (r.criteria_hits or []) if h.get("score")

@@ -303,7 +303,10 @@ def build_submission(
         dispositions[d] = dispositions.get(d, 0) + 1
 
     n = len(reports) or 1
-    sent = sum(1 for r in reports if r.agent_used)
+    # 同 `report.build_summary`：送审率 = ①层处置为 send_ai（或真的走过 AI）。
+    # 用 `agent_used` 单独算会在 `--no-ai` 下得到 0%。
+    sent = sum(1 for r in reports
+               if (r.deterministic or {}).get("disposition") == "send_ai" or r.agent_used)
     closed_mal = dispositions.get("closed_malicious", 0)
     closed_clean = dispositions.get("closed_clean", 0)
     passed = dispositions.get("pass", 0)
