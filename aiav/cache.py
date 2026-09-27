@@ -146,20 +146,36 @@ class ScanCache:
 
     # ---------------- 读写 ----------------
     @staticmethod
-    def mode(agent_available: bool, unpack: bool, archives: bool, deterministic: bool = True) -> str:
+    def mode(agent_available: bool, unpack: bool, archives: bool, deterministic: bool = True,
+             ai_threshold: int | None = None, ai_threshold_low: int | None = None) -> str:
         """分析选项指纹：不同选项算出来的结论不能互相顶替。
 
         踩过的坑：`allow_unpack=False` 的那一臂先把"没脱壳"的结论写进缓存，
         随后 `allow_unpack=True` 的一臂直接命中缓存 —— 脱壳步骤被静默跳过。
         同理，消融档 `deterministic=False`（只取模型原始判定）的结论也绝不能
         被线上档命中，否则"策略兜底"会被静默绕过。
+
+        **闸门也是选项**（2026-09-27 两档送审）：`--ai-threshold-low 0` 的那一臂
+        会把 16 个"未送审"的结论写进缓存，随后两档那一臂直接命中 —— 低档送审被静默跳过，
+        而且报告里看不出任何异常（这批文件的 `ai_tier` 会是 `none`）。
+        与"AV 库指纹进缓存键"是同一类坑。`None` = 调用方不关心（老调用点/纯规则工具），
+        这时不写进指纹，缓存键与旧条目保持一致。
         """
-        return (f"ai={int(bool(agent_available))};unpack={int(bool(unpack))}"
+        mode = (f"ai={int(bool(agent_available))};unpack={int(bool(unpack))}"
                 f";archives={int(bool(archives))};det={int(bool(deterministic))}")
+        if ai_threshold is not None or ai_threshold_low is not None:
+            from aiav.criteria import AI_GATE, AI_GATE_LOW
+
+            gate = AI_GATE if ai_threshold is None else int(ai_threshold)
+            gate_low = AI_GATE_LOW if ai_threshold_low is None else int(ai_threshold_low)
+            mode += f";gate={gate};gate_low={gate_low}"
+        return mode
 
     def get(self, sha256: str, *, agent_available: bool, samples: int,
             unpack: bool = True, archives: bool = True,
-            deterministic: bool = True) -> dict[str, Any] | None:
+            deterministic: bool = True,
+            ai_threshold: int | None = None,
+            ai_threshold_low: int | None = None) -> dict[str, Any] | None:
         if not self.enabled or not sha256:
             return None
         path = self._path(sha256)
@@ -175,8 +191,9 @@ class ScanCache:
         # 规则模式的结果不许在有 AI 的 run 里命中（防静默降级）
         if agent_available and not meta.get("ai_enabled"):
             return None
-        # 分析选项必须一致（脱壳/压缩包/AI 开关不同 = 结论不可互换）
-        if meta.get("mode") != self.mode(agent_available, unpack, archives, deterministic):
+        # 分析选项必须一致（脱壳/压缩包/AI 开关/闸门不同 = 结论不可互换）
+        if meta.get("mode") != self.mode(agent_available, unpack, archives, deterministic,
+                                         ai_threshold, ai_threshold_low):
             return None
         if sample_count(meta) < max(1, samples):
             return None
@@ -184,7 +201,9 @@ class ScanCache:
 
     def put(self, sha256: str, report: FileReport, *, ai_enabled: bool, samples: int,
             unpack: bool = True, archives: bool = True,
-            deterministic: bool = True) -> bool:
+            deterministic: bool = True,
+            ai_threshold: int | None = None,
+            ai_threshold_low: int | None = None) -> bool:
         if not self.enabled or not sha256:
             return False
         payload = report.model_dump(mode="json")
@@ -196,7 +215,8 @@ class ScanCache:
                 "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "fingerprints": self.current_fingerprints(),
                 "ai_enabled": ai_enabled,
-                "mode": self.mode(ai_enabled, unpack, archives, deterministic),
+                "mode": self.mode(ai_enabled, unpack, archives, deterministic,
+                                  ai_threshold, ai_threshold_low),
                 "samples": max(1, samples),
                 "cache_version": CACHE_VERSION,
             },

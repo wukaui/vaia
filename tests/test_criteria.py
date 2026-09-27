@@ -30,14 +30,25 @@ def test_signal_unit_derivation():
     assert 12 * C.SIGNAL_UNIT == C.AI_GATE == 300
 
 
-def test_weak_signal_alone_never_crosses_the_gate():
-    """一条弱信号过不了闸门 —— 这是"必须复合"的全部意义。"""
+def test_weak_signal_alone_never_crosses_the_high_gate():
+    """一条弱信号过不了**高档**闸门 —— 这是"必须复合"的全部意义。
+
+    ⚠️ 2026-09-27 两档送审之后的措辞变化：闸门拆成高档 300 / 低档 225 之后，
+    单条得分落在 `[225, 300)` 的判据（`XLM_EXEC_PATTERN` / `XLM_CHAR_CELLS`，各 250）
+    会**从低档送 AI** —— 这是那次决策买的东西，不是 bug。所以这里把不变式钉在
+    **高档**上：单条弱信号永远进不了高档（`ai_tier == "high"`），
+    它在低档还是静默，由 `ai_tier()` 说了算（两条断言一起看，口径就不会漂）。
+    """
     for crit in C.CRITERIA.values():
         if crit.conclusive or crit.score >= C.AI_GATE:
             continue
         verdict = C.decide([C.CriterionHit(crit.heur_id, crit.name)])
-        assert verdict.disposition is C.Disposition.PASS, (
-            f"{crit.heur_id} 单条就过了闸门（{verdict.score}），弱信号不许单独顶过门槛"
+        tier = C.ai_tier(verdict.score)
+        assert tier != "high", (
+            f"{crit.heur_id} 单条就进了高档（{verdict.score}），弱信号不许单独顶过高档门槛"
+        )
+        assert (verdict.disposition is C.Disposition.SEND_AI) == (tier in ("high", "low")), (
+            f"{crit.heur_id} 的处置与档位对不上：{verdict.disposition} / {tier}"
         )
 
 

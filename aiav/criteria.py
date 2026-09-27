@@ -35,6 +35,10 @@
     <500    弱信号 → **必须复合**。复合到 `AI_GATE` 以上才送 AI，否则记"未结案"。
             （"未结案" ≠ "判白"，报告里必须写清这个区别。）
 
+**两档送审**（2026-09-27，`AI_GATE_LOW`）：复合到 225 以上、但没到 300 的，**也送 AI**
+（记成"低档"，报告里与高档分开数）；只有 < 225 才是静默放行（不送、不下结论）。
+判据分数与三档语义一个字没动 —— 动的只是"多少分才值得送审"。225 的来路见 `AI_GATE_LOW`。
+
 ## 我们加严的一条（对上游语义的**有意偏离**，写在这里免得被当成抄错）
 
 上游"文件分 = 各段求和"，求和到 1000 就是恶意。我们不许这样：
@@ -77,6 +81,46 @@ SIGNAL_UNIT = 25
 #: 值**从上游 `DEFAULT_VERDICTS["suspicious"]` 读**（300），等价于老口径的 12
 #: （"两条弱信号才过线"）—— 不是我们写死的字面量。
 AI_GATE = SUSPICIOUS_SCORE
+
+#: **低档送审**闸门（2026-09-27 两档送审）：分数落在 `[AI_GATE_LOW, AI_GATE)` 的文件
+#: **也送 AI**，只是记成"低档"（高档 = `>= AI_GATE`）。`0` = 关掉低档（退回单档行为）。
+#:
+#: 225 不是拍的，是从 Dike 400（200 恶 + 200 良）的分数档 × 标签实测里**算出来的拐点**：
+#:
+#:     门槛 300 → 275：多送 4 良 / 多抓 7 恶
+#:     门槛 300 → 225：多送 7 良 / 多抓 9 恶      ← 取这个
+#:     门槛 300 → 125：多送 144 良 / 只多抓 15 恶（崩了；那 143 个里 6 恶 137 良）
+#:
+#: 也就是说 225 是"每一份多花的 token 换回的恶意最多"的那条线；再往下挪，
+#: 每一档换回来的都是"一堆良性"。判据分数一个都没动 —— 动的只是"多少分才值得送审"。
+AI_GATE_LOW = 225
+
+
+def effective_low_gate(gate: int, gate_low: int) -> int:
+    """把两个闸门归一成一条路由用的下界。
+
+    `gate_low <= 0`  = 低档关掉（路由下界 = `gate`）；
+    `gate_low >= gate` = 低档不存在（送审下界仍然是 `gate`，不额外放人进来）。
+    归一化放在一处，`criteria.decide` / `scanner.quick_prefilter` /
+    `scan_file` 的路由读的是同一个函数，免得三处各写一遍判断（这类"两处口径不一致"
+    是本项目踩得最多的一类坑）。
+    """
+    if gate_low <= 0:
+        return gate
+    return min(int(gate_low), int(gate))
+
+
+def ai_tier(score: int, *, gate: int = AI_GATE, gate_low: int = AI_GATE_LOW) -> str:
+    """这个分数由哪一档送去 AI：`high`（≥gate）/ `low`（[gate_low, gate)）/ `none`（静默放行）。
+
+    **三档语义（weak/strong/conclusive）一个字都没动**：这里描述的只是"门槛怎么用"，
+    也就是报告里必须区分的那三类送审 —— 高档 / 低档 / 未送。
+    """
+    if score >= gate:
+        return "high"
+    low = effective_low_gate(gate, gate_low)
+    return "low" if score >= low else "none"
+
 
 #: 强可疑档下界（上游 verdict.suspicious 之上的 `highly_suspicious` 是 700；
 #: 我们把 500 作为"送 AI 且优先"的下界 —— 与 Assemblyline 文档里的三档描述一致）。
@@ -772,12 +816,18 @@ def decide(
     hits: Iterable[CriterionHit],
     *,
     gate: int = AI_GATE,
+    gate_low: int = AI_GATE_LOW,
     safelist_hit: bool = False,
 ) -> DeterministicVerdict:
     """确定性层的结论。
 
     ⚠️ 判白优先于判恶意：一条"签名可信"的判据不会因为别的弱信号而失效 ——
     上游 safelist 的语义就是"这条不算分"，不是"扣分"。
+
+    `gate_low` = 低档送审闸门（2026-09-27）：分数落在 `[gate_low, gate)` 的文件
+    **也送 AI**。处置仍然是 `SEND_AI`（`sends_to_ai` 为 True）—— 高档/低档的区别
+    记在报告字段 `ai_tier` 里，**不改 `Disposition` 的语义**（那一层是照上游抄的，
+    我们不往 vendored 模型里塞自造枚举值）。
     """
     hits = list(hits)
     total, scores, clean_ids = file_score(hits)
@@ -828,6 +878,20 @@ def decide(
             tier=tier,
             band=band_of(total),
             reasons=reasons or ["（无判据命中却过闸门，属异常）"],
+        )
+    if total >= effective_low_gate(gate, gate_low):
+        # 低档送审（2026-09-27）：**也送 AI**，只是分数没到高档线。
+        # 理由里显式写清"它是从低档进来的" —— 报告逐文件读到这里就知道
+        # 这个文件本来（旧口径）会是"未结案"。
+        return DeterministicVerdict(
+            disposition=Disposition.SEND_AI,
+            score=total,
+            tier=tier,
+            band=band_of(total),
+            reasons=list(reasons) + [
+                f"低档送审闸门 {effective_low_gate(gate, gate_low)}~{gate - 1}："
+                f"分数 {total} 落在低档，也送 AI（旧口径下这里是『未结案』）"
+            ],
         )
     return DeterministicVerdict(
         disposition=Disposition.PASS,
@@ -980,6 +1044,7 @@ def _now_stamp() -> str:
 
 __all__ = [
     "AI_GATE",
+    "AI_GATE_LOW",
     "CONCLUSIVE_SCORE",
     "CRITERIA",
     "Criterion",
@@ -990,9 +1055,11 @@ __all__ = [
     "Direction",
     "SIGNAL_UNIT",
     "STRONG_FLOOR",
+    "ai_tier",
     "band_label",
     "classify_reason",
     "decide",
+    "effective_low_gate",
     "raw_weight_of",
     "score_hits",
     "update_stats",

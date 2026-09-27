@@ -35,6 +35,7 @@ run_one() {
   t0=$(date +%s.%N)
   "$AIAV" scan "$CORPUS" \
       --ai-threshold "$gate" \
+      --ai-threshold-low 0 \
       -o "$outdir" \
       --no-history \
       --state-dir "$statedir" \

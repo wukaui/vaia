@@ -11,6 +11,7 @@ from rich.table import Table
 
 from aiav.agent import build_agent
 from aiav.budget import budget_from_env
+from aiav.criteria import AI_GATE, AI_GATE_LOW
 from aiav.capa_data import capa_ready_or_note
 from aiav.disposition import QUARANTINE_RISKS, StateStore, default_store
 from aiav.models import RiskLevel
@@ -65,11 +66,20 @@ def scan(
     max_size_mb: int = typer.Option(50, "--max-size-mb", help="跳过超过该大小的文件"),
     include_system: bool = typer.Option(False, "--include-system", help="不跳过 Windows/Program Files 等目录"),
     ai_threshold: int = typer.Option(
-        300,
+        AI_GATE,
         "--ai-threshold",
         help="①层判据分数达到多少才把文件交给 AI（Assemblyline 刻度）。"
              "默认 300 = 上游 verdict.suspicious = 老口径的 12（两条弱信号才过线）。"
              "调到 0 会退回旧行为：每个文件都送审。",
+    ),
+    ai_threshold_low: int = typer.Option(
+        AI_GATE_LOW,
+        "--ai-threshold-low",
+        help="**低档送审**闸门（两档送审，2026-09-27）：分数落在 [低档, 高档) 的文件"
+             "**也送 AI**，报告里记成「低档」。默认 225 —— 它在 Dike 400 上是"
+             "「多抓 9 个恶意 / 只多送 7 个良性」的拐点（300→125 会多送 144 个良性，别去）。"
+             "低档与高档走同一条送审路径，只差报告字段 ai_tier。"
+             "0 = 关掉低档（退回只有高档的单档行为）。",
     ),
     deep_evidence_threshold: int = typer.Option(
         0, "--deep-evidence-threshold",
@@ -121,6 +131,15 @@ def scan(
         files = list(iter_files(path, max_size_mb=max_size_mb, include_system=include_system,
                                 skip_stats=skip_stats))
     console.print(f"共发现 {len(files)} 个文件，开始扫描...")
+    # 两档送审（2026-09-27）：这一轮真正用的两个闸门**打印出来**。
+    # 报告抬头与逐文件行里也有，但日志里最先被看的就是这一行 ——
+    # "产物看不出这一档用的什么配置"是这个项目反复踩的坑（见 10.7 第一条 ⚠️）。
+    if 0 < ai_threshold_low < ai_threshold:
+        console.print(f"[cyan]送审闸门：高档 ≥{ai_threshold} · "
+                      f"低档 {ai_threshold_low}~{ai_threshold - 1}（也送 AI）· "
+                      f"<{ai_threshold_low} 静默放行[/cyan]")
+    else:
+        console.print(f"[cyan]送审闸门：单档 ≥{ai_threshold}（低档已关闭）[/cyan]")
     if skip_stats:
         skipped = sum(skip_stats.values())
         detail = "、".join(f"{k} {v}" for k, v in sorted(skip_stats.items()))
@@ -191,6 +210,7 @@ def scan(
                 deterministic=not no_deterministic,
                 deep_evidence_threshold=deep_evidence_threshold,
                 clamav_batch=clamav_batch,
+                ai_threshold_low=ai_threshold_low,
             )
             progress.advance(task, len(files))
             for file_path, report in zip(files, reports):
@@ -205,7 +225,8 @@ def scan(
                                    agent_samples=samples or None, budget=budget, store=store,
                                    deterministic=not no_deterministic,
                                    deep_evidence_threshold=deep_evidence_threshold,
-                                   clamav_batch=clamav_batch)
+                                   clamav_batch=clamav_batch,
+                                   ai_threshold_low=ai_threshold_low)
                 reports.append(report)
                 progress.advance(task)
 

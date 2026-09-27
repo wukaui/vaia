@@ -15,11 +15,14 @@ from aiav.budget import TokenBudget
 from aiav.cache import ScanCache, cache_enabled, report_from_cache
 from aiav.criteria import (
     AI_GATE,
+    AI_GATE_LOW,
     CRITERIA,
     CriterionHit,
+    ai_tier,
     band_label,
     classify_reason,
     decide as decide_deterministic,
+    effective_low_gate,
     file_score,
     update_stats as update_criteria_stats,
 )
@@ -235,7 +238,8 @@ def iter_files(
 
 def quick_prefilter(path: Path, sha256: str, with_signature: bool = False,
                     clamav_batch: Mapping[str, Any] | None = None,
-                    ai_threshold: int | None = None) -> PreliminaryEvidence:
+                    ai_threshold: int | None = None,
+                    ai_threshold_low: int | None = None) -> PreliminaryEvidence:
     """规则预筛，不调用 LLM。
 
     with_signature=True 时附带确定性签名证据块（要调 Windows 验签，约 0.5s/文件），
@@ -251,6 +255,12 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False,
     报告抬头也写着"闸门 300"，**产物自己看不出这一档到底送了多少审**。
     路由本来就走 `scan_file` 里的 `prefilter_score >= ai_threshold`，这里只是让
     **报告字段**跟路由说同一件事。
+
+    `ai_threshold_low` = **低档送审**闸门（2026-09-27 两档送审，默认 `AI_GATE_LOW`=225）：
+    分数落在 `[低档, 高档)` 的文件也送 AI。报告字段里因此多两项 ——
+    `gate_low`（这一轮真正的低档线）与 `ai_tier`（`high` / `low` / `none`）。
+    ⚠️ 这里跟 `ai_threshold` 是**同一个坑**：字段必须跟运行时闸门走，
+    否则"两档"在产物里看不出区别（低档送审的文件会被读成 `pass` 未结案）。
     """
     ext = path.suffix.lower()
     name_lower = path.name.lower()
@@ -533,7 +543,8 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False,
     # 判干净方向的结案判据命中时**归零**（上游 safelist 语义），所以分数与结论同源。
     score, scored, clean_ids = file_score(hits)
     gate_used = AI_GATE if ai_threshold is None else int(ai_threshold)
-    verdict_now = decide_deterministic(hits, gate=gate_used)
+    gate_low_used = AI_GATE_LOW if ai_threshold_low is None else int(ai_threshold_low)
+    verdict_now = decide_deterministic(hits, gate=gate_used, gate_low=gate_low_used)
 
     return PreliminaryEvidence(
         path=str(path),
@@ -564,6 +575,14 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False,
             "sends_to_ai": verdict_now.sends_to_ai,
             "reasons": verdict_now.reasons,
             "gate": gate_used,
+            # 两档送审（2026-09-27）：低档线 + 这个分数落在哪一档（high / low / none）。
+            # 报告抬头与逐文件行都读这两项来区分"高档送审 / 低档送审 / 未送"。
+            "gate_low": effective_low_gate(gate_used, gate_low_used),
+            # ⚠️ 只有**真的进了送审路由**的文件才有档位：确定性结案（≥1000 判恶意 /
+            # 判干净）的文件根本没走到路由，它们的分数可能 ≥1000（按分数算会记成 high），
+            # 那是假的 —— 所以这里以 `sends_to_ai` 为准，没送就是 none。
+            "ai_tier": (ai_tier(score, gate=gate_used, gate_low=gate_low_used)
+                        if verdict_now.sends_to_ai else "none"),
         },
     )
 
@@ -1401,6 +1420,7 @@ def scan_file(
     deterministic: bool = True,
     deep_evidence_threshold: int | None = None,
     clamav_batch: Mapping[str, Any] | None = None,
+    ai_threshold_low: int = AI_GATE_LOW,
 ) -> FileReport:
     """扫描单个文件。
 
@@ -1414,6 +1434,12 @@ def scan_file(
 
     `clamav_batch` 是 `tools.clamav_scan_batch(files)` 的返回值：**整批只起一次 clamscan**
     的 ClamAV 结果，①层查表用。不传 = 单文件兜底（每次重新加载库，6.3 s/文件）。
+
+    `ai_threshold_low` = **低档送审**闸门（2026-09-27 两档送审）。路由下界取
+    `effective_low_gate(ai_threshold, ai_threshold_low)`：
+    `score >= 高档` → 高档送审；`低档 <= score < 高档` → 也送 AI（低档）；
+    `< 低档` → 静默放行（不送、不下结论）。`ai_threshold_low=0` = 关掉低档（旧行为）。
+    两个闸门在报告里都留痕（`deterministic.gate` / `gate_low` / `ai_tier`）。
     """
     try:
         sha256 = compute_sha256(path)
@@ -1495,7 +1521,12 @@ def scan_file(
                                 samples=requested_samples,
                                 unpack=allow_unpack and _unpack_enabled(),
                                 archives=allow_archives and _archives_enabled(),
-                                deterministic=deterministic)
+                                deterministic=deterministic,
+                                # 闸门进缓存键（2026-09-27 两档送审）：同一批文件在两档配置下
+                                # 的结论**不可互换** —— 少了这一项，先跑的基线档会把"未送审"的
+                                # 结论喂给两档档（低档那 16 个文件会被静默跳过，产物看不出异常）。
+                                ai_threshold=ai_threshold,
+                                ai_threshold_low=ai_threshold_low)
         if cached:
             fresh_disp = ({"status": "previously_quarantined", "id": prev.get("id")}
                           if prev and prev.get("status") == "quarantined" else {})
@@ -1507,6 +1538,7 @@ def scan_file(
         clamav_batch=clamav_batch,
         # 闸门传给预筛：让报告里的处置/闸门字段跟下面的路由说同一件事
         ai_threshold=ai_threshold,
+        ai_threshold_low=ai_threshold_low,
     )
 
     # 分流·取证层阈值（2026-09-27）：≤0 = 不分流（全部文件都跑 capa/floss，旧行为）。
@@ -1621,7 +1653,8 @@ def scan_file(
                         cr = scan_file(child, agent=agent, ai_threshold=ai_threshold, store=store,
                                        allow_unpack=True, agent_samples=samples, allow_archives=False,
                                        budget=budget, deterministic=deterministic,
-                                       deep_evidence_threshold=deep_threshold)
+                                       deep_evidence_threshold=deep_threshold,
+                                       ai_threshold_low=ai_threshold_low)
                         child_reports.append(cr)
                         archive_info["children"].append({
                             "name": child.name, "risk": cr.verdict.risk.value,
@@ -1637,6 +1670,11 @@ def scan_file(
         except Exception as exc:  # noqa: BLE001 - 压缩包处理失败不影响主流程
             archive_info = {"error": f"压缩包处理失败: {exc}"}
 
+    # ---- 送审路由（两档，2026-09-27）----
+    # 高档 = `--ai-threshold`（默认 300）；低档 = `--ai-threshold-low`（默认 225，0 = 关掉低档）。
+    # 路由下界由 `criteria.effective_low_gate` 归一 —— 与 `quick_prefilter` 写报告字段
+    # 用的是同一个函数（"闸门怎么用"这件事只能有一处口径）。
+    route_gate = effective_low_gate(ai_threshold, ai_threshold_low)
     budget_blocked = bool(budget is not None and budget.exceeded())
     if budget_blocked:
         budget.note_skipped()
@@ -1644,7 +1682,10 @@ def scan_file(
                  % (budget.used, budget.limit))
         verdict = heuristic_verdict(evidence)
         evidence_sources = attribute_evidence(verdict.evidence, agent_trace, agent_used=False)
-    elif agent is not None and evidence.prefilter_score >= ai_threshold:
+    elif agent is not None and evidence.prefilter_score >= route_gate:
+        # `route_gate` = 两档里的**低档线**（`--ai-threshold-low`，默认 225）。
+        # 高档（≥`--ai-threshold`）与低档（[低档, 高档)）在这里走的是同一条送审路径 ——
+        # 区别只记在报告字段 `ai_tier` 里（高档/低档），不改判据、不改三档语义。
         retry_infos: list[dict] = []
         try:
             # ---- 确定性证据前置（2026-09-27）：本地一次采齐，0 token ----
@@ -1756,6 +1797,7 @@ def scan_file(
             inner_path = Path(packing["unpack"]["output"])
             inner = scan_file(inner_path, agent=agent, ai_threshold=ai_threshold,
                               deep_evidence_threshold=deep_threshold,
+                              ai_threshold_low=ai_threshold_low,
                               store=store, allow_unpack=False, agent_samples=samples,
                               budget=budget, deterministic=deterministic)
             packing["unpack"].update({
@@ -1889,7 +1931,8 @@ def scan_file(
                        ai_enabled=agent is not None,
                        samples=(agent_samples if agent_samples is not None else _agent_samples()),
                        unpack=allow_unpack and _unpack_enabled(),
-                       archives=allow_archives and _archives_enabled())
+                       archives=allow_archives and _archives_enabled(),
+                       ai_threshold=ai_threshold, ai_threshold_low=ai_threshold_low)
     return final_report
 
 
@@ -1904,10 +1947,12 @@ def scan_files_concurrent(
     deterministic: bool = True,
     deep_evidence_threshold: int | None = None,
     clamav_batch: Mapping[str, Any] | None = None,
+    ai_threshold_low: int = AI_GATE_LOW,
 ) -> list[FileReport]:
     """并发扫描多个文件；每个线程使用独立 Agent，避免共享模型客户端。
 
     `clamav_batch` 见 `scan_file` —— 批次是只读的，多线程共享同一个 dict 没问题。
+    `ai_threshold_low` = 低档送审闸门（两档送审，2026-09-27），见 `scan_file`。
     """
     if not files:
         return []
@@ -1917,7 +1962,8 @@ def scan_files_concurrent(
         return [scan_file(p, agent, ai_threshold, agent_samples=agent_samples, budget=budget,
                           store=store, deterministic=deterministic,
                           deep_evidence_threshold=deep_evidence_threshold,
-                          clamav_batch=clamav_batch)
+                          clamav_batch=clamav_batch,
+                          ai_threshold_low=ai_threshold_low)
                 for p in files]
 
     local = threading.local()
@@ -1932,7 +1978,8 @@ def scan_files_concurrent(
                          agent_samples=agent_samples, budget=budget, store=store,
                          deterministic=deterministic,
                          deep_evidence_threshold=deep_evidence_threshold,
-                         clamav_batch=clamav_batch)
+                         clamav_batch=clamav_batch,
+                         ai_threshold_low=ai_threshold_low)
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
         return list(executor.map(work, files))

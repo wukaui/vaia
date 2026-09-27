@@ -309,6 +309,14 @@ def build_submission(
     # 用 `agent_used` 单独算会在 `--no-ai` 下得到 0%。
     sent = sum(1 for r in reports
                if (r.deterministic or {}).get("disposition") == "send_ai" or r.agent_used)
+    # 两档送审（2026-09-27）：高档 / 低档分开数（口径与 `report.build_summary` 同一套字段）
+    tiers: dict[str, int] = {"high": 0, "low": 0, "none": 0}
+    for r in reports:
+        t = (r.deterministic or {}).get("ai_tier")
+        if t not in tiers:
+            t = ("high" if ((r.deterministic or {}).get("disposition") == "send_ai"
+                            or r.agent_used) else "none")
+        tiers[t] = tiers.get(t, 0) + 1
     closed_mal = dispositions.get("closed_malicious", 0)
     closed_clean = dispositions.get("closed_clean", 0)
     passed = dispositions.get("pass", 0)
@@ -320,6 +328,9 @@ def build_submission(
         "results": files,
         "deterministic": {
             "dispositions": dispositions,
+            "ai_tiers": tiers,
+            "sent_high": tiers.get("high", 0),
+            "sent_low": tiers.get("low", 0),
             "send_rate": round(sent / n, 4),
             "closed_malicious_rate": round(closed_mal / n, 4),
             "closed_clean_rate": round(closed_clean / n, 4),

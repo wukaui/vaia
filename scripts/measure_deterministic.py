@@ -101,6 +101,10 @@ def run_corpus(name: str, files: list[Path], rule: str | None, gate: int,
                 path, agent=None, ai_threshold=gate, store=None,
                 allow_unpack=False, allow_archives=False, cache=None,
                 clamav_batch=clamav_batch,
+                # 这个脚本量的是**单档闸门曲线**（`--ai-threshold` 逐档），
+                # 两档送审（2026-09-27）是另一件事 —— 低档显式关掉，
+                # 否则"闸门 300"这一档会把 225~299 的文件也算成送审，曲线含义就变了。
+                ai_threshold_low=0,
             )
         except Exception as exc:  # noqa: BLE001
             rows.append({"path": str(path), "label": label_of(path, rule, labels),

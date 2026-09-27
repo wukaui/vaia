@@ -125,6 +125,33 @@ def build_summary(reports: list[FileReport]) -> dict[str, Any]:
     #   未结案率     = 没线索、不送 AI、也没结论（⚠️ 不是判白）
     n = len(reports) or 1
     dispositions = Counter((r.deterministic or {}).get("disposition") or "unknown" for r in reports)
+
+    # ---- 两档送审的账（2026-09-27）----
+    # 三类：`high`（≥高档，旧口径也送）/ `low`（[低档, 高档)，**新增**）/ `none`（静默放行）。
+    # `ai_tier` 由 `quick_prefilter` 按运行时闸门写（确定性结案的文件记 `none`）。
+    # 老产物（缓存里的、两档之前跑的）没有这个字段 —— 按 `send_ai` + 分数回推，
+    # 免得读老报告时三档数加起来对不上总数。
+    gates_low = Counter((r.deterministic or {}).get("gate_low") for r in reports
+                        if isinstance((r.deterministic or {}).get("gate_low"), int))
+    gate_low = gates_low.most_common(1)[0][0] if gates_low else 0
+
+    def _tier_of(r: FileReport) -> str:
+        det_r = r.deterministic or {}
+        tier = det_r.get("ai_tier")
+        if tier in ("high", "low", "none"):
+            return str(tier)
+        if det_r.get("disposition") == "send_ai" or r.agent_used:
+            return "high" if int(r.prefilter_score or 0) >= gate else "low"
+        return "none"
+
+    tiers = Counter(_tier_of(r) for r in reports)
+    low_files = [r for r in reports if _tier_of(r) == "low"]
+    low_ai = [r for r in low_files if r.agent_used]
+    low_flagged = [r for r in low_ai
+                   if r.verdict.risk in (RiskLevel.suspicious, RiskLevel.malicious)]
+    low_conf = [round(float(r.verdict.confidence), 3) for r in low_ai]
+    low_degraded = [r for r in low_ai
+                    if (r.agent_retry or {}).get("outcome") == "degraded_to_rules"]
     # ⚠️ 送审率看的是**①层处置**（send_ai），不是 `agent_used`。
     # `--no-ai` 跑的时候 `agent_used` 永远是 False —— 拿它当送审率会得到 0% 这种假数
     # （踩过一次：40 个文件里 13 个该送审，卡片上写着 0.0%）。
@@ -144,6 +171,23 @@ def build_summary(reports: list[FileReport]) -> dict[str, Any]:
         "errors": sum(1 for r in reports if r.error),
         "deterministic": {
             "gate": gate,
+            # 低档闸门与三档计数（两档送审，2026-09-27）。`gate_low=0` = 低档关掉。
+            "gate_low": gate_low,
+            "ai_tiers": {k: tiers.get(k, 0) for k in ("high", "low", "none")},
+            "sent_high": tiers.get("high", 0),
+            "sent_low": tiers.get("low", 0),
+            # 低档这一档的**可读账**：送了多少、AI 真判了几个、判 flag 几个、
+            # AI 给的置信度（均值/区间）。目的就一个：让"AI 也看过这一档"有痕迹，
+            # 而不是静默放行 —— 这是两档送审唯一容易被读错的地方。
+            "low_tier": {
+                "files": len(low_files),
+                "ai_files": len(low_ai),
+                "flagged": len(low_flagged),
+                "degraded": len(low_degraded),
+                "confidence_mean": (round(sum(low_conf) / len(low_conf), 3) if low_conf else None),
+                "confidence_min": (min(low_conf) if low_conf else None),
+                "confidence_max": (max(low_conf) if low_conf else None),
+            },
             "send_rate": round(sent / n, 4),
             "sent": sent,
             "closed_malicious": dispositions.get("closed_malicious", 0),
@@ -688,8 +732,23 @@ def _file_row(r: FileReport, index: int) -> str:
         if pl.get("skipped"):
             pl_bits.append("按类型未跑: " + "、".join(_esc(s) for s in pl["skipped"][:6]))
         usage_html += f"<div class='disp'>{' · '.join(pl_bits)}</div>"
+    # 送审档（两档送审，2026-09-27）：逐行把"这个文件走的是哪一档"写出来 ——
+    # 低档送审的文件在旧口径下是"未结案"，报告里必须一眼能分出来它其实**送过 AI**。
+    tier = (r.deterministic or {}).get("ai_tier")
+    if tier not in ("high", "low", "none"):
+        tier = ("high" if r.agent_used or (r.deterministic or {}).get("disposition") == "send_ai"
+                else "none")
+    tier_label = {"high": "高档送审", "low": "低档送审", "none": "未送（静默）"}[tier]
+    tier_html = ({"high": "<span style='color:#555'>高档送审</span>",
+                  "low": "<b style='color:#ef6c00'>低档送审</b>",
+                  "none": "<span class='dim'>未送（静默）</span>"}[tier])
+    # 置信度这一列：走 AI 的是**模型给的**置信度；没走 AI 的是规则兜底那几条
+    # （0.65/0.75 这种常量），必须标出来 —— 否则读报告的人会把规则置信度当成 AI 置信度。
+    conf_cell = (f"{r.verdict.confidence:.2f}" if r.agent_used
+                 else f"<span class='dim'>{r.verdict.confidence:.2f} 规则</span>")
+
     search_text = " ".join([r.path, r.verdict.category or "", r.verdict.summary or "",
-                            " ".join(r.yara_hits or [])])
+                            " ".join(r.yara_hits or []), tier_label])
     return f"""
             <tr data-risk="{_esc(r.verdict.risk.value)}" data-ext="{_esc(r.extension or '(none)')}"
                 data-cat="{_esc(r.verdict.category or 'unknown')}" data-error="{1 if r.error else 0}"
@@ -698,11 +757,12 @@ def _file_row(r: FileReport, index: int) -> str:
                 data-deepdive="{1 if au.get('deep_dive') else 0}"
                 data-preloaded="{1 if pl.get('tools') else 0}"
                 data-deepskipped="{1 if pl.get('deep_forensics') == 'skipped' else 0}"
+                data-tier="{tier}"
                 data-text="{_esc(search_text.lower())}" data-idx="{index}">
               <td><code>{_esc(r.path)}</code>{error}</td>
               <td><span class="badge" style="background:{color}">{_esc(r.verdict.risk.value)}</span>
-                  <div class="disp">score={r.prefilter_score}</div></td>
-              <td>{r.verdict.confidence:.2f}</td>
+                  <div class="disp">score={r.prefilter_score} · {tier_html}</div></td>
+              <td>{conf_cell}</td>
               <td>{_esc(r.verdict.category)}</td>
               <td>{_esc(r.verdict.summary)}</td>
               <td>{'是' if r.agent_used else '否'}{retry_html}{usage_html}</td>
@@ -845,6 +905,24 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
 
     # ---- ①层账本（2026-09-27）----
     det = summary["deterministic"]
+    low = det.get("low_tier") or {}
+    tiers = det.get("ai_tiers") or {}
+    if det.get("gate_low") and 0 < det["gate_low"] < det["gate"]:
+        conf_txt = ("AI 置信度 " + (
+            f"{low['confidence_min']:.2f}~{low['confidence_max']:.2f}"
+            f"（均值 {low['confidence_mean']:.2f}）" if low.get("confidence_mean") is not None
+            else "N/A"))
+        low_note = (
+            f"<div class='meta'><b>两档送审</b>：高档 <b>≥{det['gate']}</b> {det.get('sent_high', 0)} 个 · "
+            f"低档 <b>{det['gate_low']}~{det['gate'] - 1}</b>（<b>也送 AI</b>）"
+            f"{det.get('sent_low', 0)} 个 —— 其中 AI 真判了 {low.get('ai_files', 0)} 个、"
+            f"判 flag {low.get('flagged', 0)} 个、{conf_txt}"
+            f"{f'、<b class="error">降级到规则 {low["degraded"]} 个</b>' if low.get('degraded') else ''}"
+            f" · 静默放行（<b>&lt;{det['gate_low']}</b>，不送、不下结论）{tiers.get('none', 0)} 个。"
+            "低档与高档走的是**同一条送审路径**，只差报告字段 <code>ai_tier</code>。</div>")
+    else:
+        low_note = ("<div class='meta'>两档送审：<b>低档已关闭</b>（这一轮是单档闸门 "
+                    f"≥{det['gate']}）—— 低档送审 {det.get('sent_low', 0)} 个。</div>")
     det_note = (
         "<div class='meta'>①层（确定性）闸门 <b>" + str(det["gate"]) + "</b> 分"
         "（Assemblyline 刻度，= 上游 verdict.suspicious）。"
@@ -856,6 +934,7 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
            f"{_esc('、'.join(det['unclassified_signals']))} —— 有信号加了分却没进判据表，"
            "这批数字按核验铁律作废。</b>" if det["files_with_unclassified_signals"] else "")
         + "</div>")
+    det_note += low_note
     unavailable = det.get("unavailable_detections") or []
     unavailable_note = (
         "<div class='meta'><b>未安装 / 未配置的检测项（这些判据在本批里是空的，不是『跑了没问题』）：</b>"
@@ -935,6 +1014,8 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
     {_card("走深挖路径", summary["usage"]["files_deep_dive"], "#1565c0")}
     {_card("纯读预采集证据", summary["usage"]["files_no_tool_call"], "#2e7d32")}
     {_card("送审率", f"{det['send_rate']*100:.1f}%", "#c62828")}
+    {_card("高档送审", det.get('sent_high', 0), "#c62828")}
+    {_card("低档送审（也送 AI）", det.get('sent_low', 0), "#ef6c00")}
     {_card("①层结案率", f"{det['closed_rate']*100:.1f}%", "#2e7d32")}
     {_card("确定性判恶意", det["closed_malicious"], "#c62828")}
     {_card("确定性判干净", det["closed_clean"], "#2e7d32")}
@@ -987,6 +1068,8 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
     <button data-risk="__deepdive__" onclick="setRisk(this)">只看走了深挖</button>
     <button data-risk="__preloaded__" onclick="setRisk(this)">只看证据前置</button>
     <button data-risk="__deepskipped__" onclick="setRisk(this)">只看跳过深度取证</button>
+    <button data-risk="__lowtier__" onclick="setRisk(this)">只看低档送审</button>
+    <button data-risk="__highorlow__" onclick="setRisk(this)">只看送过 AI（两档）</button>
     <span class="dim" id="cnt"></span>
   </div>
   <table id="t">
@@ -1021,6 +1104,8 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
           : curRisk === '__deepdive__' ? r.getAttribute('data-deepdive') === '1'
           : curRisk === '__deepskipped__' ? r.getAttribute('data-deepskipped') === '1'
           : curRisk === '__preloaded__' ? r.getAttribute('data-preloaded') === '1'
+          : curRisk === '__lowtier__' ? r.getAttribute('data-tier') === 'low'
+          : curRisk === '__highorlow__' ? r.getAttribute('data-tier') !== 'none'
                                       : r.getAttribute('data-risk') === curRisk);
       var okExt = !curExt || r.getAttribute('data-ext') === curExt;
       var okCat = !curCat || r.getAttribute('data-cat') === curCat;
