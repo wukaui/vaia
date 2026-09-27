@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from aiav.criteria import AI_GATE
 from aiav.models import FileReport, RiskLevel
 
 RISK_COLOR = {
@@ -19,13 +20,17 @@ RISK_ORDER = {RiskLevel.clean: 0, RiskLevel.suspicious: 1, RiskLevel.malicious: 
 
 
 def _band(score: int) -> str:
+    """分数档位。**Assemblyline 刻度**（2026-09-27 换）：一条弱信号 125 分起，
+    两条才够 300（送审闸门），500-999 是强可疑，≥1000 是确定性结案。"""
     if score == 0:
         return "0"
-    if score <= 4:
-        return "1-4"
-    if score <= 11:
-        return "5-11"
-    return ">=12"
+    if score < 300:
+        return "1-299"
+    if score < 500:
+        return "300-499"
+    if score < 1000:
+        return "500-999"
+    return ">=1000"
 
 
 def build_summary(reports: list[FileReport]) -> dict[str, Any]:
@@ -104,15 +109,67 @@ def build_summary(reports: list[FileReport]) -> dict[str, Any]:
         "category": _dimension(lambda r: r.verdict.category or "unknown"),
     }
 
+    # ---- ①层账本（2026-09-27）：产品的三个命数 ----
+    #   送审率       = 真正交给 AI 的文件占比（旧架构是 100%）
+    #   纯①层结案率  = 不送 AI 就把结论定下来的比例（确定性判恶意 + 确定性判干净）
+    #   未结案率     = 没线索、不送 AI、也没结论（⚠️ 不是判白）
+    n = len(reports) or 1
+    dispositions = Counter((r.deterministic or {}).get("disposition") or "unknown" for r in reports)
+    # ⚠️ 送审率看的是**①层处置**（send_ai），不是 `agent_used`。
+    # `--no-ai` 跑的时候 `agent_used` 永远是 False —— 拿它当送审率会得到 0% 这种假数
+    # （踩过一次：40 个文件里 13 个该送审，卡片上写着 0.0%）。
+    sent = sum(1 for r in reports
+               if (r.deterministic or {}).get("disposition") == "send_ai" or r.agent_used)
+    unclassified = [r for r in reports if r.unclassified_signals]
+    criteria_fired = Counter(
+        h.get("heur_id", "?") for r in reports for h in (r.criteria_hits or []) if h.get("score")
+    )
+    criteria_zeroed = Counter(
+        h.get("heur_id", "?") for r in reports for h in (r.criteria_hits or [])
+        if h.get("safelisted")
+    )
+
     return {
         "total": len(reports),
         "errors": sum(1 for r in reports if r.error),
+        "deterministic": {
+            "gate": AI_GATE,
+            "send_rate": round(sent / n, 4),
+            "sent": sent,
+            "closed_malicious": dispositions.get("closed_malicious", 0),
+            "closed_clean": dispositions.get("closed_clean", 0),
+            "closed_rate": round(
+                (dispositions.get("closed_malicious", 0) + dispositions.get("closed_clean", 0)) / n, 4),
+            "unresolved": dispositions.get("pass", 0),
+            "unresolved_rate": round(dispositions.get("pass", 0) / n, 4),
+            "dispositions": dict(dispositions),
+            "criteria_fired": dict(criteria_fired.most_common(20)),
+            "criteria_safelisted": dict(criteria_zeroed),
+            # 核验铁律：这个数**必须为 0**。不为 0 说明有信号加了分却没进判据表。
+            "files_with_unclassified_signals": len(unclassified),
+            "unclassified_signals": sorted({s for r in reports for s in (r.unclassified_signals or [])})[:10],
+            # 工具可用性（核验铁律：先验"工具真跑了吗"）。未安装的检测项直接列在报告抬头，
+            # 免得读报告的人把"没报 AV 命中"读成"AV 查过了没有"。
+            "unavailable_detections": _unavailable_detections(reports),
+            # ClamAV 这一步的**批次账本**（2026-09-27）：引擎/库版本、扫了几个、命中几个、
+            # 静默跳过几个、批次报错。核验铁律要求"未安装 / 报错 / 静默降级计数不为 0"能一眼看见 ——
+            # 实测踩过：整批 319 个文件超时没结果行，报告里当时一点痕迹都没有。
+            "clamav": _clamav_summary(reports),
+            "conclusive_producers": {
+                "DET_KNOWN_BAD_HASH": "内置哈希库（aiav/data/known_bad_hashes.txt）",
+                "DET_CLAMAV_SIGNATURE": "clamscan / clamdscan",
+                "DET_EICAR": "内置常量",
+                "DET_TRUSTED_SIGNATURE": "aiav.authenticode（纯 Python 验签）",
+                "DET_SAFELIST_HIT": "运营白名单",
+            },
+        },
         "dimensions": dimensions,
         "risk": {k: risk.get(k, 0) for k in ("clean", "suspicious", "malicious")},
         "agent_used": sum(1 for r in reports if r.agent_used),
         "by_extension": dict(ext.most_common(12)),
         "by_category": dict(category.most_common(10)),
-        "by_score_band": {b: band.get(b, 0) for b in ("0", "1-4", "5-11", ">=12")},
+        "by_score_band": {b: band.get(b, 0) for b in
+                          ("0", "1-299", "300-499", "500-999", ">=1000")},
         "yara_top": dict(yara.most_common(8)),
         "disposition": {k: disp.get(k, 0) for k in
                         ("none", "whitelisted", "quarantined", "quarantine_planned",
@@ -163,6 +220,50 @@ def build_summary(reports: list[FileReport]) -> dict[str, Any]:
             "children_scanned": sum(len((r.archive or {}).get("children") or []) for r in reports),
             "truncated": sum(1 for r in reports if (r.archive or {}).get("truncated")),
         },
+        # 模型调用重试留痕（2026-09-26 修①）：用了重试几次、有几条最终降级到规则判定。
+        # 旧实现失败即静默降级，报告里只有一句 error，看不出"这条 clean 其实是规则给的"。
+        "retry": {
+            "files_with_retry": sum(1 for r in reports if (r.agent_retry or {}).get("retried")),
+            "retry_count": sum(int((r.agent_retry or {}).get("retry_count") or 0)
+                               for r in reports),
+            "files_degraded": sum(1 for r in reports
+                                  if (r.agent_retry or {}).get("outcome") == "degraded_to_rules"),
+            "failure_kinds": dict(Counter(
+                f.get("kind", "?") for r in reports
+                for f in ((r.agent_retry or {}).get("failures") or []))),
+        },
+        # 确定性证据前置 + 工具调用/token 留痕（2026-09-27）：回答两个问题 ——
+        # "这次判定用了几次工具调用"、"有没有走按需深挖这条路"。
+        # 口径：`tool_calls` 只数 AI 自己发起的（预采集是本地 0 token 的活，单独计）。
+        "usage": {
+            "tool_calls": sum(int((r.agent_usage or {}).get("tool_calls") or 0)
+                              for r in reports),
+            "files_deep_dive": sum(1 for r in reports if (r.agent_usage or {}).get("deep_dive")),
+            "files_no_tool_call": sum(1 for r in reports if (r.agent_usage or {}).get("tool_calls") == 0
+                                      and r.agent_used),
+            "tokens": sum(int((r.agent_usage or {}).get("tokens") or 0) for r in reports),
+            "by_tool": dict(Counter(
+                name for r in reports
+                for name, count in ((r.agent_usage or {}).get("by_tool") or {}).items()
+                for _ in range(int(count)))),
+        },
+        "preload": {
+            "files_preloaded": sum(1 for r in reports if (r.evidence_preload or {}).get("tools")),
+            "tools": dict(Counter(
+                name for r in reports
+                for name in ((r.evidence_preload or {}).get("tools") or []))),
+            "chars": sum(int((r.evidence_preload or {}).get("chars") or 0) for r in reports),
+            "ms": round(sum(float((r.evidence_preload or {}).get("elapsed_ms") or 0)
+                            for r in reports), 1),
+            "truncated": sum(1 for r in reports if (r.evidence_preload or {}).get("truncated")),
+            # 分流·取证层（2026-09-27）：这一轮有多少文件**跳过**了 capa/floss、
+            # 有多少文件真跑了。跳过必须在报告里看得见 —— 否则读报告的人会把
+            # "没报注入能力"读成"查过了、没有"。
+            "deep_done": sum(1 for r in reports
+                             if (r.evidence_preload or {}).get("deep_forensics") == "done"),
+            "deep_skipped": sum(1 for r in reports
+                                if (r.evidence_preload or {}).get("deep_forensics") == "skipped"),
+        },
         "top_warnings": warnings[:5],
     }
 
@@ -207,8 +308,19 @@ def write_reports(reports: list[FileReport], output_dir: Path,
             "claim_warnings": summary["evidence"]["claim_warnings"],
             "evidence_unattributed": summary["evidence"]["unattributed"],
             "disposition": summary["disposition"],
+            # 模型调用重试（2026-09-26 修①）：让脚本能直接读"重试了几个文件、降级了几个"
+            "files_with_retry": summary["retry"]["files_with_retry"],
+            "files_degraded": summary["retry"]["files_degraded"],
+            # 确定性证据前置 + 工具调用/token（2026-09-27）：脚本直接读"平均几次调用/多少 token"
+            "tool_calls": summary["usage"]["tool_calls"],
+            "files_deep_dive": summary["usage"]["files_deep_dive"],
+            "tokens": summary["usage"]["tokens"],
+            "preloaded_files": summary["preload"]["files_preloaded"],
         },
         "aggregate": summary,
+        # Assemblyline 形状的证据链（2026-09-27）：判据 / 依据 / 证据段 / 服务 / 血缘。
+        # 结构由**装进 venv 的上游 `Result` 模型**校验过，校验不过会在这里抛出来（不静默）。
+        "assemblyline": _assemblyline_payload(reports),
         # 逐文件溯源统计：报告正文里每条结论能不能对回工具输出，这里给出可核对的计数
         "attribution_by_file": {
             str(r.path): attribution_stats(r) for r in reports
@@ -230,6 +342,110 @@ def write_reports(reports: list[FileReport], output_dir: Path,
     audit_path.write_text(json.dumps(audit_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     html_path.write_text(_render_html(reports, summary), encoding="utf-8")
     return json_path, html_path, audit_path
+
+
+def _assemblyline_payload(reports: list[FileReport]) -> dict[str, Any]:
+    """Assemblyline 形状的那一份（提交级 + 逐文件），并**用上游模型校验**。
+
+    校验失败不让扫描挂掉，但要在报告里留下 `schema_errors` —— 静默降级是核验铁律里
+    明令禁止的（"看 not installed / error / 静默降级计数，不为 0 则该批数字直接作废"）。
+    """
+    from aiav.assemblyline_view import build_submission, criteria_catalog, validate_result
+
+    stats = load_criteria_stats()
+    submission = build_submission(reports, stats=stats)
+    schema_errors: list[str] = []
+    for item in submission["results"]:
+        try:
+            validate_result(item)
+        except Exception as exc:  # noqa: BLE001
+            schema_errors.append(f"{item.get('sha256', '?')[:16]}: {type(exc).__name__}: {exc}")
+    return {
+        "upstream": "CybercentreCanada/assemblyline",
+        "upstream_version": "4.7.4.20",
+        "licence": "MIT",
+        "criteria_catalog": criteria_catalog(),
+        "criteria_stats": stats,
+        "schema_errors": schema_errors,
+        "submission": submission,
+    }
+
+
+def _unavailable_detections(reports: list["FileReport"] | None = None) -> list[str]:
+    """没装的检测项 + **跑失败了的**检测项。
+
+    后半截是 2026-09-27 补的：ClamAV 装了、但这一批没扫成（超时 / 起不来）时，
+    `DET_CLAMAV_SIGNATURE` 一条都不会命中，报告看上去跟"扫过且干净"一模一样 ——
+    必须在这里显式说出来，否则核验铁律那一条就是空话。
+    """
+    out: list[str] = []
+    try:
+        from aiav.tools import unavailable_detections
+
+        out += unavailable_detections()
+    except Exception:  # noqa: BLE001
+        pass
+    failed = sorted({str((r.clamav or {}).get("error"))
+                     for r in (reports or []) if (r.clamav or {}).get("error")})
+    if failed:
+        n = sum(1 for r in (reports or []) if (r.clamav or {}).get("error"))
+        out.append(f"ClamAV 预扫**没跑成**：{n} 个文件没有结果行"
+                   f"（{'；'.join(failed)[:200]}）—— 这批的 `DET_CLAMAV_SIGNATURE` 按「未产出」算，"
+                   f"不是「扫过且干净」")
+    return out
+
+
+def _clamav_summary(reports: list["FileReport"]) -> dict[str, Any]:
+    """把逐文件的 ClamAV 记录汇总成批次账本（报告抬头直接看）。"""
+    recs = [r.clamav for r in reports if r.clamav]
+    if not recs:
+        return {"recorded": False,
+                "note": "本轮没有 ClamAV 记录（没跑预扫，或引擎未安装）—— 不许读成「扫过且干净」"}
+    kinds: dict[str, int] = {}
+    for c in recs:
+        if c.get("infected"):
+            k = c.get("kind") or "malware"
+            kinds[k] = kinds.get(k, 0) + 1
+    errors: dict[str, int] = {}
+    for c in recs:
+        if c.get("error"):
+            errors[str(c["error"])] = errors.get(str(c["error"]), 0) + 1
+    return {
+        "recorded": True,
+        "files": len(recs),
+        "available": sum(1 for c in recs if c.get("available")),
+        "batched": sum(1 for c in recs if c.get("batch")),
+        "infected": sum(1 for c in recs if c.get("infected")),
+        "kinds": kinds,
+        # 核验铁律：这两个数**必须为 0**
+        "files_without_a_result_line": sum(
+            1 for c in recs if c.get("available") and "静默跳过" in str(c.get("error") or "")),
+        "files_with_a_batch_error": sum(1 for c in recs if c.get("error")),
+        "errors": dict(sorted(errors.items(), key=lambda kv: -kv[1])[:3]),
+        "engine": _clamav_engine_note(),
+    }
+
+
+def _clamav_engine_note() -> str:
+    """引擎版本 / 库版本 —— "装了 ClamAV"不等于"库是新的、真加载了"。"""
+    try:
+        from aiav.tools import clamav_engine_info
+
+        info = clamav_engine_info()
+        if not info.get("available"):
+            return ""
+        return f"{info.get('exe')} · {info.get('version')}"
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def load_criteria_stats() -> dict[str, Any]:
+    try:
+        from aiav.criteria import load_stats
+
+        return load_stats()
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 SUPPORTED_SUPPORT = ("explicit", "overlap")
@@ -416,11 +632,62 @@ def _file_row(r: FileReport, index: int) -> str:
         trace_cell = "<span class='dim'>无模型断言</span>"
 
     error = f"<p class='error'>Error: {_esc(r.error)}</p>" if r.error else ""
+    # 重试留痕（2026-09-26 修①）：一眼看出"这条结论是重试拿到的"还是"降级到规则的"
+    retry_html = ""
+    rt = r.agent_retry or {}
+    if rt:
+        outcome = rt.get("outcome")
+        bits = [f"模型调用 {rt.get('attempts', '?')}/{rt.get('max_attempts', '?')} 次"]
+        if rt.get("retried"):
+            bits.append(f"<b>用过重试</b>（{rt.get('retry_count', 0)} 次）")
+        else:
+            bits.append("一次过")
+        if outcome == "degraded_to_rules":
+            bits.append("<b class='error'>最终降级到规则判定</b>")
+        if rt.get("failures"):
+            kinds = ", ".join(sorted({f.get("kind", "?") for f in rt["failures"]}))
+            bits.append(f"错误: {_esc(kinds)}")
+        cls = "disp" if outcome != "degraded_to_rules" else "disp warn"
+        retry_html = f"<div class='{cls}'>{' · '.join(bits)}</div>"
+
+    # 工具调用 / 深挖留痕（2026-09-27）：一眼看出这次判定是"纯读预采集证据就下结论"
+    # 还是"自己又调了 N 次工具去深挖"。口径与 summary.usage.tool_calls 一致：
+    # 只数 AI 自己发起的调用（预采集是本地 0 token 的活，单独列在 evidence_preload 里）。
+    usage_html = ""
+    au = r.agent_usage or {}
+    if au:
+        calls = int(au.get("tool_calls") or 0)
+        bits = [f"工具调用 <b>{calls}</b> 次",
+                "走了深挖路径" if calls else "纯读预采集证据"]
+        if au.get("tokens"):
+            bits.append(f"{int(au['tokens']):,} token")
+        if au.get("by_tool"):
+            bits.append("、".join(f"{_esc(k)}×{v}" for k, v in list(au["by_tool"].items())[:6]))
+        if au.get("degraded"):
+            bits.append("<b class='error'>调用失败已降级</b>")
+        usage_html = f"<div class='disp'>{' · '.join(bits)}</div>"
+    pl = r.evidence_preload or {}
+    if pl.get("tools"):
+        pl_bits = [f"预采集 {len(pl['tools'])} 项: " + "、".join(_esc(t) for t in pl["tools"]),
+                   f"{int(pl.get('chars') or 0):,} 字符",
+                   f"{float(pl.get('elapsed_ms') or 0) / 1000:.1f}s（本地，0 token）"]
+        if pl.get("truncated"):
+            pl_bits.append("<b class='warn'>证据块超预算已降级</b>")
+        if pl.get("deep_forensics") == "skipped":
+            pl_bits.append("<b class='warn'>深度取证已跳过（capa/floss 未跑）</b>")
+        if pl.get("skipped"):
+            pl_bits.append("按类型未跑: " + "、".join(_esc(s) for s in pl["skipped"][:6]))
+        usage_html += f"<div class='disp'>{' · '.join(pl_bits)}</div>"
     search_text = " ".join([r.path, r.verdict.category or "", r.verdict.summary or "",
                             " ".join(r.yara_hits or [])])
     return f"""
             <tr data-risk="{_esc(r.verdict.risk.value)}" data-ext="{_esc(r.extension or '(none)')}"
                 data-cat="{_esc(r.verdict.category or 'unknown')}" data-error="{1 if r.error else 0}"
+                data-retried="{1 if rt.get('retried') else 0}"
+                data-degraded="{1 if rt.get('outcome') == 'degraded_to_rules' else 0}"
+                data-deepdive="{1 if au.get('deep_dive') else 0}"
+                data-preloaded="{1 if pl.get('tools') else 0}"
+                data-deepskipped="{1 if pl.get('deep_forensics') == 'skipped' else 0}"
                 data-text="{_esc(search_text.lower())}" data-idx="{index}">
               <td><code>{_esc(r.path)}</code>{error}</td>
               <td><span class="badge" style="background:{color}">{_esc(r.verdict.risk.value)}</span>
@@ -428,7 +695,7 @@ def _file_row(r: FileReport, index: int) -> str:
               <td>{r.verdict.confidence:.2f}</td>
               <td>{_esc(r.verdict.category)}</td>
               <td>{_esc(r.verdict.summary)}</td>
-              <td>{'是' if r.agent_used else '否'}</td>
+              <td>{'是' if r.agent_used else '否'}{retry_html}{usage_html}</td>
               <td>{trace_cell}</td>
               <td>{disp_html or '-'}{pack_html}{sample_html}</td>
               <td>{evidence_html}{warnings_html}{sources_html}{policy_html}{proposals_html}{trace_html}</td>
@@ -473,6 +740,28 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
 
     rows = "".join(_file_row(r, i) for i, r in enumerate(reports))
 
+    from aiav.assemblyline_view import criteria_catalog
+
+    catalog = criteria_catalog()
+    catalog_html = (
+        "<table><thead><tr><th>判据 ID</th><th>名字</th><th>分</th><th>上限</th>"
+        "<th>适用类型</th><th>产出工具</th><th>ATT&amp;CK</th><th>档位</th></tr></thead><tbody>"
+        + "".join(
+            "<tr>"
+            f"<td><code>{_esc(c['heur_id'])}</code></td>"
+            f"<td>{_esc(c['name'])}<div class='meta'>{_esc(c['description'][:160])}</div></td>"
+            f"<td>{c['score']}</td>"
+            f"<td>{'' if c['max_score'] is None else c['max_score']}</td>"
+            f"<td>{_esc(c['filetype'])}</td>"
+            f"<td>{_esc(c['produced_by'])}</td>"
+            f"<td>{_esc('、'.join(a['attack_id'] + ' ' + (a.get('name') or '') for a in c['attack']) or '-')}</td>"
+            f"<td>{'确定性结案' if c['conclusive'] else ('强可疑' if c['score'] >= 500 else '弱信号')}"
+            f"{'（判干净）' if c['direction'] == 'clean' else ''}</td>"
+            "</tr>"
+            for c in catalog)
+        + "</tbody></table>"
+    )
+
     warnings_block = ""
     if summary["top_warnings"]:
         warnings_block = _details(
@@ -486,8 +775,55 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
         sampling_note = (f"<div class='meta'>多次采样：{summary['sampling']['files_with_multiple_samples']} "
                          f"个文件，平均一致性 {rate:.0f}%</div>")
 
-    trace_table = {"结论条数（AI 档）": ev["ai_claims"],
-                   "有工具出处": ev["attributed"],
+    # 重试/降级说明（2026-09-26 修①）：降级不是"没发生"，必须显式写在报告抬头
+    retry_note = ""
+    retry = summary["retry"]
+    if retry["files_with_retry"] or retry["files_degraded"]:
+        kinds = "、".join(f"{k}×{v}" for k, v in retry["failure_kinds"].items()) or "无"
+        retry_note = (
+            f"<div class='meta'>模型调用重试：{retry['files_with_retry']} 个文件用过重试"
+            f"（共 {retry['retry_count']} 次）；<b class='error'>"
+            f"{retry['files_degraded']} 个文件最终降级到规则判定</b>"
+            f"（降级文件的 risk 不是 AI 结论，见明细行）。失败类型：{_esc(kinds)}</div>")
+
+    # 证据前置 / 工具调用说明（2026-09-27）：让读报告的人一眼看出"这次判定用了几次工具调用、
+    # 有没有走深挖路径"。平均调用次数是这套设计最核心的一个数，不能只藏在逐文件明细里。
+    usage_note = ""
+    usage = summary["usage"]
+    preload = summary["preload"]
+    if summary["agent_used"]:
+        avg_calls = usage["tool_calls"] / max(1, summary["agent_used"])
+        bits = [f"工具调用 {usage['tool_calls']} 次（平均 <b>{avg_calls:.1f}</b> 次/文件）",
+                f"走深挖路径 {usage['files_deep_dive']} 个文件",
+                f"纯读预采集证据 {usage['files_no_tool_call']} 个文件"]
+        if usage["tokens"]:
+            bits.append(f"模型消耗 {usage['tokens']:,} token"
+                        f"（平均 {usage['tokens'] / max(1, summary['agent_used']):,.0f}/文件）")
+        if usage["by_tool"]:
+            bits.append("AI 自调工具：" + "、".join(
+                f"{_esc(k)}×{v}" for k, v in sorted(usage["by_tool"].items(),
+                                                    key=lambda kv: -kv[1])[:6]))
+        usage_note = f"<div class='meta'>{' ｜ '.join(bits)}</div>"
+    if preload["files_preloaded"]:
+        pl_bits = [f"{preload['files_preloaded']} 个文件做过确定性证据前置",
+                   f"共 {preload['chars']:,} 字符",
+                   f"本地采集 {preload['ms'] / 1000:.1f}s（0 token）"]
+        if preload["tools"]:
+            pl_bits.append("预采集工具：" + "、".join(
+                f"{_esc(k)}×{v}" for k, v in sorted(preload["tools"].items(),
+                                                    key=lambda kv: -kv[1])))
+        if preload["truncated"]:
+            pl_bits.append(f"<b class='warn'>{preload['truncated']} 个文件的证据块超预算已降级</b>")
+        if preload.get("deep_skipped"):
+            # 分流·取证层：**必须在抬头就说**，否则"没报注入能力"会被读成"查过了没有"
+            pl_bits.append(
+                f"<b class='warn'>{preload['deep_skipped']} 个文件跳过深度取证"
+                f"（capa/floss 未跑，只给轻量证据）</b>"
+            )
+            pl_bits.append(f"深度取证已跑 {preload.get('deep_done', 0)} 个文件")
+        usage_note += f"<div class='meta'>{' ｜ '.join(pl_bits)}</div>"
+
+    trace_table = {"结论条数（AI 档）": ev["ai_claims"],                   "有工具出处": ev["attributed"],
                    "无出处（模型推断）": ev["unattributed"],
                    "有出处率（AI 档口径）": _rate_text(ev["attributed_rate"], digits=1),
                    "确定性判定断言（未走 AI，不计入出处率）": ev["deterministic_claims"],
@@ -496,6 +832,28 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
                    "告警/千条结论": ev["warnings_per_1000_claims"]}
     pack_table = {"检出加壳": summary["packing"]["packed"],
                   "成功脱壳": summary["packing"]["unpacked_ok"]}
+
+    # ---- ①层账本（2026-09-27）----
+    det = summary["deterministic"]
+    det_note = (
+        "<div class='meta'>①层（确定性）闸门 <b>" + str(det["gate"]) + "</b> 分"
+        "（Assemblyline 刻度，= 上游 verdict.suspicious）。"
+        f"送审率 <b>{det['send_rate']*100:.1f}%</b>（{det['sent']}/{total}）· "
+        f"纯①层结案 <b>{det['closed_rate']*100:.1f}%</b>"
+        f"（判恶意 {det['closed_malicious']} + 判干净 {det['closed_clean']}）· "
+        f"未结案 <b>{det['unresolved']}</b>（<b>未结案 ≠ 判白</b>，只是没线索、不值得花 token）。"
+        + (f" <b class='error'>⚠ {det['files_with_unclassified_signals']} 个文件有未分类信号："
+           f"{_esc('、'.join(det['unclassified_signals']))} —— 有信号加了分却没进判据表，"
+           "这批数字按核验铁律作废。</b>" if det["files_with_unclassified_signals"] else "")
+        + "</div>")
+    unavailable = det.get("unavailable_detections") or []
+    unavailable_note = (
+        "<div class='meta'><b>未安装 / 未配置的检测项（这些判据在本批里是空的，不是『跑了没问题』）：</b>"
+        + _esc("；".join(unavailable)) + "</div>"
+    ) if unavailable else ""
+    det_table = "".join(
+        f"<tr><td><code>{_esc(k)}</code></td><td>{_esc(v)}</td></tr>"
+        for k, v in sorted(det["criteria_fired"].items(), key=lambda kv: -kv[1]))
 
     def _options(rows: list[dict[str, Any]]) -> str:
         return "".join(f"<option value='{_esc(r['value'])}'>{_esc(r['value'])}（{r['count']}）</option>"
@@ -562,8 +920,21 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
     {_card("已白名单", summary["disposition"]["whitelisted"], "#2e7d32")}
     {_card("结论有出处率", _rate_text(ev["attributed_rate"]), "#1565c0")}
     {_card("断言告警", ev["claim_warnings"], "#b71c1c")}
+    {_card("重试过", summary["retry"]["files_with_retry"], "#1565c0")}
+    {_card("降级到规则", summary["retry"]["files_degraded"], "#c62828")}
+    {_card("走深挖路径", summary["usage"]["files_deep_dive"], "#1565c0")}
+    {_card("纯读预采集证据", summary["usage"]["files_no_tool_call"], "#2e7d32")}
+    {_card("送审率", f"{det['send_rate']*100:.1f}%", "#c62828")}
+    {_card("①层结案率", f"{det['closed_rate']*100:.1f}%", "#2e7d32")}
+    {_card("确定性判恶意", det["closed_malicious"], "#c62828")}
+    {_card("确定性判干净", det["closed_clean"], "#2e7d32")}
+    {_card("未结案（≠判白）", det["unresolved"], "#ef6c00")}
   </div>
+  {det_note}
+  {unavailable_note}
   {sampling_note}
+  {retry_note}
+  {usage_note}
   {warnings_block}
 
   <h2>聚合视图</h2>
@@ -584,6 +955,13 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
             + _kv_table("载荷判定", summary["packing"]["payload_verdicts"]) + "</div>"
             + "</div>")}
 
+  <h2>①层判据表（照 Assemblyline 三档语义）</h2>
+  <div class="meta">判据表就是代码里的那张表（<code>aiav/criteria.py</code>），
+  报告里原样列出来 —— 每条判据的名字 / 分数 / 上限 / 适用类型 / 产出工具 / ATT&amp;CK
+  都能当场核对，不是"总分多少、来源不明"。</div>
+  {_details("本批判据命中计数", "<table class='mini'>" + det_table + "</table>")}
+  {_details("判据全表（" + str(len(catalog)) + " 条）", catalog_html)}
+
   <h2>逐文件结果</h2>
   <div class="toolbar">
     <input id="q" placeholder="过滤：文件名 / 类别 / 结论 / YARA…" oninput="applyFilter()">
@@ -594,6 +972,11 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
     <select id="fExt" onchange="applyFilter()"><option value="">全部类型</option>{ext_options}</select>
     <select id="fCat" onchange="applyFilter()"><option value="">全部家族</option>{cat_options}</select>
     <button data-risk="__error__" onclick="setRisk(this)">只看失败</button>
+    <button data-risk="__retried__" onclick="setRisk(this)">只看重试</button>
+    <button data-risk="__degraded__" onclick="setRisk(this)">只看降级到规则</button>
+    <button data-risk="__deepdive__" onclick="setRisk(this)">只看走了深挖</button>
+    <button data-risk="__preloaded__" onclick="setRisk(this)">只看证据前置</button>
+    <button data-risk="__deepskipped__" onclick="setRisk(this)">只看跳过深度取证</button>
     <span class="dim" id="cnt"></span>
   </div>
   <table id="t">
@@ -623,7 +1006,12 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
       var r = rows[i];
       var okRisk = (curRisk === 'all')
         || (curRisk === '__error__' ? r.getAttribute('data-error') === '1'
-                                    : r.getAttribute('data-risk') === curRisk);
+          : curRisk === '__retried__' ? r.getAttribute('data-retried') === '1'
+          : curRisk === '__degraded__' ? r.getAttribute('data-degraded') === '1'
+          : curRisk === '__deepdive__' ? r.getAttribute('data-deepdive') === '1'
+          : curRisk === '__deepskipped__' ? r.getAttribute('data-deepskipped') === '1'
+          : curRisk === '__preloaded__' ? r.getAttribute('data-preloaded') === '1'
+                                      : r.getAttribute('data-risk') === curRisk);
       var okExt = !curExt || r.getAttribute('data-ext') === curExt;
       var okCat = !curCat || r.getAttribute('data-cat') === curCat;
       var okText = !q || (r.getAttribute('data-text') || '').indexOf(q) >= 0;

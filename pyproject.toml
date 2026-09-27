@@ -30,6 +30,12 @@ dependencies = [
     # 静态分析工具，必装（规则集/签名集另跑 `aiav capa-setup`）
     "flare-capa>=9.4",
     "flare-floss>=3.1",
+    # Assemblyline（CybercentreCanada/assemblyline，MIT）—— **装包路线，不抄模型**。
+    # 用它的 ODM 模型（报告结构校验）与计分语义（common/heuristics.py），
+    # 适配层在 aiav/assemblyline_core/。依赖多、包大都不是问题；
+    # 唯一红线是**不依赖它的平台**（MongoDB / ES / Redis / K8s）—— 见 tests/test_assemblyline_core.py。
+    # 钉死版本：报告结构校验拿它当基准，上游改字段我们得知道。
+    "assemblyline==4.7.4.20",
 ]
 
 [project.optional-dependencies]

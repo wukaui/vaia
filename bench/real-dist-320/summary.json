@@ -1,0 +1,164 @@
+{
+  "generated_at": "2026-09-27T14:25:28",
+  "kind_note": "每个块都带 `kind`：measured = 实测，extrapolated = 外推，derived = 由两者算出。**外推的数不许当实测值用**",
+  "layer1_arm": {
+    "corpus": "realdist320",
+    "n": 320,
+    "n_malicious": 20,
+    "n_benign": 300,
+    "send_rate": 0.0031,
+    "sent": 1,
+    "closed_rate": 0.1406,
+    "closed_malicious": 17,
+    "closed_clean": 28,
+    "unresolved": 274,
+    "recall_layer1": 0.9,
+    "recall_deterministic_only": 0.85,
+    "benign_send_rate": 0.0,
+    "layer1_seconds": 39.3,
+    "clamav_seconds": 73.0,
+    "total_seconds": 112.3,
+    "seconds_per_file": 0.3509,
+    "clamav": {
+      "hit_files": 17,
+      "hits": 17,
+      "malware_signature": 17,
+      "heuristic": 0,
+      "pua": 0,
+      "signatures_top": {
+        "Win.Trojan.Tepfer-81": 2,
+        "Win.Packed.Zbot-9758659-0": 1,
+        "Win.Trojan.Smartfortress-7139545-0": 1,
+        "Win.Packed.Zbot-9753617-0": 1,
+        "Win.Trojan.Shiz-1332": 1,
+        "Win.Trojan.Mediyes-1": 1,
+        "Doc.Downloader.Emotet-9778182-0": 1,
+        "Win.Packed.Zbot-9753745-0": 1,
+        "Win.Malware.Zbot-9734844-0": 1,
+        "Win.Trojan.Tepfer-82": 1,
+        "Win.Trojan.Zbot-9757924-0": 1,
+        "Win.Packed.Krucky-10058099-0": 1,
+        "Win.Dropper.Zeus-9940962-0": 1,
+        "Win.Trojan.Generickdz-1187": 1,
+        "Win.Packed.Krucky-6914753-0": 1,
+        "Doc.Downloader.Emotet-9343219-0": 1
+      }
+    },
+    "consistency": {
+      "files": 320,
+      "same": 320,
+      "rate": 1.0
+    },
+    "verification_ok": true,
+    "unclassified_signals": 0,
+    "errors": 0
+  },
+  "ablation_without_clamav": {
+    "note": "从同一批 rows 里摘掉 ClamAV 的 1000 分后重算处置（不重扫）；口径是分数各段求和、摘一段就是减掉它",
+    "without_clamav_send_rate": 0.0344,
+    "without_clamav_sent": 11,
+    "without_clamav_recall": 0.55,
+    "clamav_hit_files": 17,
+    "clamav_hit_closed_malicious": 17,
+    "clamav_hit_close_rate": 1.0,
+    "files_rescued_from_pass": 7
+  },
+  "ai_arm_full_run_measured": {
+    "kind": "measured",
+    "scope": "full-run",
+    "note": "指令到达前那一轮已经全量跑完（13:47 结束 / 墙钟 41 分钟）；本轮没有再调模型，0 token",
+    "files_scanned": 319,
+    "files_reaching_ai": 273,
+    "tokens_measured": 2195054,
+    "mean_tokens_per_ai_file": 8040.5,
+    "median_tokens_per_ai_file": 7526,
+    "tool_calls_total": 11,
+    "files_deep_dive": 10,
+    "files_degraded": 2
+  },
+  "ai_arm_sampled": {
+    "sample_measured": {
+      "kind": "measured",
+      "scope": "sample",
+      "files_drawn": 48,
+      "files_reaching_ai": 40,
+      "files_short_circuited": 7,
+      "files_degraded_to_rules": 1,
+      "tokens_measured": 321106,
+      "mean_tokens_per_ai_file": 8027.6,
+      "median_tokens_per_ai_file": 7020.5,
+      "mean_preload_ms_per_ai_file": 29720.5,
+      "mean_cny_per_ai_file": 0.0642,
+      "wall_clock_s_per_ai_file_amortized": 9.01,
+      "by_label": {
+        "benign": {
+          "drawn": 45,
+          "reached_ai": 39,
+          "tokens_mean": 8057.3
+        },
+        "malicious": {
+          "drawn": 3,
+          "reached_ai": 1,
+          "tokens_mean": 6872.0
+        }
+      },
+      "note": "抽样文件在**已跑过的那一轮**里的逐文件实测值；本轮没有再调模型"
+    },
+    "extrapolated": {
+      "kind": "extrapolated",
+      "basis": "抽样实测均值 8027.6 token/文件 × 语料 320 个文件",
+      "tokens": 2568848,
+      "cny": 20.55,
+      "tokens_per_file": 8027.6,
+      "unit_price_cny_per_million": 8.0,
+      "wall_clock_s": 2883.5,
+      "note": "**外推，不是实测**：按抽样均值乘语料规模得来，别当实测值用",
+      "same_scope": {
+        "basis": "抽样实测均值 8027.6 token/文件 × 出了 AI 结论的 273 个文件",
+        "tokens": 2191548,
+        "cny": 17.53,
+        "note": "确定性结案的那批在送审前就短路了，所以「全送」实际只有这批文件真花了 token"
+      }
+    },
+    "sampling_check_vs_full_run": {
+      "kind": "measured",
+      "scope": "full-run reference",
+      "note": "对照臂在**指令到达前已经全量跑完**（没有重复花钱）；这里只把它当抽样口径的参照，不是抽样产物的一部分",
+      "full_run_files_reaching_ai": 273,
+      "full_run_files_sent_to_ai": 274,
+      "full_run_files_degraded_to_rules": 1,
+      "full_run_tokens": 2195054,
+      "full_run_mean_tokens_per_ai_file": 8040.490842490843,
+      "sample_vs_full_mean_delta_pct": -0.16,
+      "sample_extrapolated_same_scope_tokens": 2191548,
+      "sample_vs_full_total_delta_pct": -0.16
+    }
+  },
+  "counterfactual_all_ai": {
+    "kind": "extrapolated",
+    "scope": "corpus",
+    "basis": "抽样实测均值 8027.6 token/文件 × 语料 320 个文件（外推，不是实测）",
+    "tokens": 2568832,
+    "cny": 20.55,
+    "tokens_per_file": 8027.6,
+    "unit_price_cny_per_million": 8.0,
+    "note": "单价是项目里唯一定义的那一处（偏高的一档），不是服务商报价单"
+  },
+  "production_gate300": {
+    "kind": "measured",
+    "scope": "production-gate-300",
+    "files_sent": 1,
+    "tokens": 9387,
+    "cny": 0.08,
+    "note": "送审文件的 token 取自对照臂的同一条流水线（同一路径、同一预采集），不是另跑一轮"
+  },
+  "saved": {
+    "kind": "derived",
+    "note": "「全部送 AI」那一列是外推值，所以省下的量也带着外推口径；生产档那一列是实测",
+    "files": 319,
+    "tokens": 2559445,
+    "cny": 20.48,
+    "ratio": 0.9963
+  },
+  "assumed_est_per_file": 12000
+}

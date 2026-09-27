@@ -16,6 +16,7 @@ from aiav.disposition import QUARANTINE_RISKS, StateStore, default_store
 from aiav.models import RiskLevel
 from aiav.report import write_reports
 from aiav.scanner import compute_sha256, iter_files, scan_file, scan_files_concurrent
+from aiav.tools import clamav_scan_batch
 
 
 def _configure_console_encoding() -> None:
@@ -63,7 +64,18 @@ def scan(
     no_ai: bool = typer.Option(False, "--no-ai", help="只用规则扫描，不调用 LLM"),
     max_size_mb: int = typer.Option(50, "--max-size-mb", help="跳过超过该大小的文件"),
     include_system: bool = typer.Option(False, "--include-system", help="不跳过 Windows/Program Files 等目录"),
-    ai_threshold: int = typer.Option(5, "--ai-threshold", help="预筛分数达到多少才调用 Agent"),
+    ai_threshold: int = typer.Option(
+        300,
+        "--ai-threshold",
+        help="①层判据分数达到多少才把文件交给 AI（Assemblyline 刻度）。"
+             "默认 300 = 上游 verdict.suspicious = 老口径的 12（两条弱信号才过线）。"
+             "调到 0 会退回旧行为：每个文件都送审。",
+    ),
+    deep_evidence_threshold: int = typer.Option(
+        0, "--deep-evidence-threshold",
+        help="分流·取证层：预筛分数低于它的文件只采轻量证据（PE 头/导入表/明文字符串/签名），"
+             "不跑 capa/floss。0=不分流（全部深挖）。单位是 Assemblyline 刻度，"
+             "300 = 老口径的 12"),
     model: str | None = typer.Option(None, "--model", help="覆盖 AGENT_MODEL"),
     base_url: str | None = typer.Option(None, "--base-url", help="覆盖 AGENT_BASE_URL"),
     workers: int = typer.Option(4, "--workers", "-w", help="AI Agent 并发数"),
@@ -114,6 +126,37 @@ def scan(
         detail = "、".join(f"{k} {v}" for k, v in sorted(skip_stats.items()))
         console.print(f"[yellow]另有 {skipped} 项未进扫描（{detail}）；已记入报告的 scan_skips 字段[/yellow]")
 
+    # ---- ①层 ClamAV 批量预扫（2026-09-27）----
+    # **一个文件起一次 clamscan = 每次重新加载 362 万条签名（6.3 s）**；一次进程扫一批，
+    # 摊到每文件 0.1~0.4 s。只读扫描：不执行样本、不上传、不联网。
+    # 没装 ClamAV 时这里返回 available=False，①层把这条判据记成"未产出"（报告抬头可见），
+    # 不许读成"扫过且干净" —— 核验铁律那一条就是为这个来的。
+    clamav_batch = None
+    try:
+        batch = clamav_scan_batch(files)
+        if batch["available"]:
+            clamav_batch = batch
+            engine = batch.get("engine") or {}
+            console.print(
+                f"[cyan]ClamAV 预扫：{batch['scanned']}/{len(files)} 个文件 · "
+                f"命中 {batch['found']}（真病毒 {batch['kinds']['malware']} / "
+                f"启发式 {batch['kinds']['heuristic']} / PUA {batch['kinds']['pua']}）· "
+                f"{batch['invocations']} 次进程调用 · {batch['elapsed_s']}s · "
+                f"库 {engine.get('db_version') or '?'}[/cyan]")
+            if batch["unreported"]:
+                console.print(f"[red]⚠️ {len(batch['unreported'])} 个文件没有 ClamAV 结果行"
+                              f"（静默跳过，按核验铁律这批要重跑）[/red]")
+            # 批次自己的报错必须吼出来：①层会把"没结果"记成"未产出"而不是"扫过且干净"，
+            # 但不吼的话，看到的就是一份安静的、送审率偏高的报告（2026-09-27 踩过）。
+            if batch.get("error"):
+                console.print(f"[red]⚠️ ClamAV 预扫报错：{batch['error']}"
+                              f"（这批文件按「未产出」记，不是「扫过且干净」）[/red]")
+            if batch.get("splits"):
+                console.print(f"[yellow]ClamAV 预扫超时切批重试 {batch['splits']} 次"
+                              f"（机器忙；结果仍然完整）[/yellow]")
+    except Exception as exc:  # noqa: BLE001 - AV 预扫失败不该让整轮扫描跑不起来
+        console.print(f"[yellow]ClamAV 预扫失败（{type(exc).__name__}: {exc}），退回单文件路径[/yellow]")
+
     budget = budget_from_env() if token_budget <= 0 else None
     if token_budget > 0:
         from aiav.budget import TokenBudget
@@ -146,6 +189,8 @@ def scan(
                 files, agent_factory=agent_factory, ai_threshold=ai_threshold, workers=workers,
                 agent_samples=samples or None, budget=budget, store=store,
                 deterministic=not no_deterministic,
+                deep_evidence_threshold=deep_evidence_threshold,
+                clamav_batch=clamav_batch,
             )
             progress.advance(task, len(files))
             for file_path, report in zip(files, reports):
@@ -158,7 +203,9 @@ def scan(
             for file_path in files:
                 report = scan_file(file_path, agent=agent, ai_threshold=ai_threshold,
                                    agent_samples=samples or None, budget=budget, store=store,
-                                   deterministic=not no_deterministic)
+                                   deterministic=not no_deterministic,
+                                   deep_evidence_threshold=deep_evidence_threshold,
+                                   clamav_batch=clamav_batch)
                 reports.append(report)
                 progress.advance(task)
 

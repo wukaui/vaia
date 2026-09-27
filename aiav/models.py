@@ -48,6 +48,20 @@ class PreliminaryEvidence(BaseModel):
     read_error: str = ""
     # 确定性签名证据块（tools.signature_evidence），只从工具/Windows 验签来，不靠模型推断
     signature: dict[str, Any] = Field(default_factory=dict)
+    # ①层判据命中（2026-09-27）：每条都对齐 Assemblyline `result.py::Heuristic` 的形状
+    # （heur_id / name / description / score / max_score / attack / signature）。
+    # 用途：报告里能说清"这 375 分是哪几条判据给的、每条上限多少、哪个工具产出的"。
+    criteria_hits: list[dict[str, Any]] = Field(default_factory=list)
+    # 产出方给了理由文本、但判据表里分不出是哪条判据的信号。**必须为空**：
+    # 不为空就说明有信号加了分却没进判据表（幽灵分）。报告与测试都会盯这个字段。
+    unclassified_signals: list[str] = Field(default_factory=list)
+    # ClamAV 的产出状态（≥1000 档判据的产出方）。`available=False` = **本机没装**，
+    # 不许读成"扫过且干净" —— 核验铁律要求这一项在报告里显式可见。
+    clamav: dict[str, Any] = Field(default_factory=dict)
+    # 确定性层的结论（三档语义）：disposition / tier / band / score / gate / reasons。
+    # disposition ∈ {closed_malicious, closed_clean, send_ai, pass}。
+    # ⚠️ `pass` **不是判白**，只是"没线索，不值得花 token"。
+    deterministic: dict[str, Any] = Field(default_factory=dict)
 
 
 class FileReport(BaseModel):
@@ -58,6 +72,11 @@ class FileReport(BaseModel):
     prefilter_score: int
     prefilter_reasons: list[str] = Field(default_factory=list)
     yara_hits: list[str] = Field(default_factory=list)
+    # ①层判据命中 + 确定性结论（2026-09-27）。报告结构照 Assemblyline 摆的证据链
+    # 就是从这里长出来的，见 `aiav/assemblyline_view.py`。
+    criteria_hits: list[dict[str, Any]] = Field(default_factory=list)
+    unclassified_signals: list[str] = Field(default_factory=list)
+    deterministic: dict[str, Any] = Field(default_factory=dict)
     verdict: Verdict
     agent_used: bool = False
     agent_trace: list[dict[str, Any]] = Field(default_factory=list)
@@ -80,6 +99,26 @@ class FileReport(BaseModel):
     archive: dict[str, Any] = Field(default_factory=dict)
     # 缓存命中信息（from_cache / cached_at）
     cache: dict[str, Any] = Field(default_factory=dict)
+    # 模型调用的重试留痕（2026-09-26 修①）：这次判定是**一次过**、**重试过**，
+    # 还是最终**降级到规则判定**。旧实现失败即静默降级，报告里只留一句 error，
+    # 看不出"重试过没有"、也看不出"这条结论其实不是 AI 下的"。
+    # 结构：{attempts, max_attempts, retried, retry_count, outcome, failures[], final_error, policy}
+    agent_retry: dict[str, Any] = Field(default_factory=dict)
+    # 确定性证据前置（2026-09-27）：这次送审前**本地预采集**了哪些工具输出、多大、多久。
+    # 结构：{kind, tools[], skipped[], chars, elapsed_ms, truncated, budget_note, policy}
+    # 用途：回答"这次判定到底是不是靠 AI 一轮轮调工具调出来的"。
+    evidence_preload: dict[str, Any] = Field(default_factory=dict)
+    # 工具调用 / token 留痕（2026-09-27）：这次判定**用了几次工具调用**、**有没有走深挖路径**、
+    # 花了多少 token。口径：`tool_calls` 只数 AI 自己发起的（预采集是本地 0 token 的活，
+    # 单独记在 evidence_preload 里），`deep_dive` = 有没有走过工具调用这条路。
+    # 结构：{tool_calls, deep_dive, tokens, by_tool{}, preloaded_tools[]}
+    agent_usage: dict[str, Any] = Field(default_factory=dict)
+    # ClamAV 这一步**到底跑没跑成**（2026-09-27）：结构
+    # {available, infected, signature, kind, batch, error}。
+    # 为什么要单独留一份：`DET_CLAMAV_SIGNATURE` 没命中，可能是"查过了没有"，
+    # 也可能是"这一批压根没扫成"（超时 / 没装）。**报告里必须能分开这两件事** ——
+    # 实测踩过：一整批 319 个文件因为超时没有结果行，报告里却看不出任何异常。
+    clamav: dict[str, Any] = Field(default_factory=dict)
 
 
 @dataclass
@@ -94,3 +133,6 @@ class ScanDeps:
     # 用途：证据溯源时把"AI 引用送审事实"和"AI 凭空推断"区分开 ——
     # 送审事实是文件里的真实字节，引用它算有依据；两者都对不上的才算无依据。
     yara_details: list[dict[str, Any]] = field(default_factory=list)
+    # 模型调用的重试留痕（agent.run_agent_with_retry 原地写入）：
+    # 成功与失败两条路都写，`scanner` 据此把"用过重试/降级到规则"记进报告。
+    agent_retry: dict[str, Any] = field(default_factory=dict)

@@ -66,6 +66,28 @@ def rules_fingerprint() -> str:
     return h.hexdigest()[:16]
 
 
+def clamav_fingerprint() -> str:
+    """ClamAV **引擎 + 签名库**的指纹（没有它，AV 层的结论会被跨库版本重放）。
+
+    实测踩过（2026-09-27）：一次 ClamAV 批次超时（整批一条结果行都没有）跑出来的报告被写进缓存，
+    机器安静下来、ClamAV 跑成之后**重跑还是吃那批"没有 AV 证据"的旧结论** ——
+    送审率 0.31% 被缓存重放成 3.45%，而且报告里看不出是缓存干的。
+    规则文件变了要整体失效（见 `rules_fingerprint`），**AV 签名库每天更新，同理**。
+
+    "没装 / 没跑成"也是一个指纹值（`unavailable`）：健康的一轮写的条目不会被
+    "AV 没跑成"的一轮命中，反之亦然。
+    """
+    try:
+        from aiav import tools
+
+        info = tools.clamav_engine_info()
+    except Exception:  # noqa: BLE001
+        return "unknown"
+    if not info.get("available"):
+        return "unavailable"
+    return f"{info.get('exe')}:{info.get('db_version') or '?'}"
+
+
 def whitelist_fingerprint(store_root: Path | None = None) -> str:
     """白名单文件指纹：白名单一变，旧缓存条目整体失效。
 
@@ -109,10 +131,10 @@ class ScanCache:
     # ---------------- 内部 ----------------
     @property
     def fingerprints(self) -> dict[str, str]:
-        """版本 / 规则 / 提示词指纹（进程内稳定，算一次即可）。"""
+        """版本 / 规则 / 提示词 / AV 库指纹（进程内稳定，算一次即可）。"""
         if self._fp is None:
             self._fp = {"version": CACHE_VERSION, "rules": rules_fingerprint(),
-                        "prompt": prompt_fingerprint()}
+                        "prompt": prompt_fingerprint(), "clamav": clamav_fingerprint()}
         return self._fp
 
     def current_fingerprints(self) -> dict[str, str]:
