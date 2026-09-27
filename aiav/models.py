@@ -113,6 +113,12 @@ class FileReport(BaseModel):
     # 单独记在 evidence_preload 里），`deep_dive` = 有没有走过工具调用这条路。
     # 结构：{tool_calls, deep_dive, tokens, by_tool{}, preloaded_tools[]}
     agent_usage: dict[str, Any] = Field(default_factory=dict)
+    # ClamAV 这一步**到底跑没跑成**（2026-09-27）：结构
+    # {available, infected, signature, kind, batch, error}。
+    # 为什么要单独留一份：`DET_CLAMAV_SIGNATURE` 没命中，可能是"查过了没有"，
+    # 也可能是"这一批压根没扫成"（超时 / 没装）。**报告里必须能分开这两件事** ——
+    # 实测踩过：一整批 319 个文件因为超时没有结果行，报告里却看不出任何异常。
+    clamav: dict[str, Any] = Field(default_factory=dict)
 
 
 @dataclass

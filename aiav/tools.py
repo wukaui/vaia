@@ -521,7 +521,16 @@ def capa_ready() -> tuple[bool, str]:
 #     · 启发式（`Heur.AdvML.B` / `HEUR:Trojan.Win32`）→ 300 分，可疑，送 AI（**不算 1000**）
 #     · PUA / adware / riskware → **0 分，只留痕**：上游 `kw_score_revision_map` 里 `adware: 0`，
 #       按定义 PUA 不是恶意软件。签名名照原样进报告的证据链，但不参与定级。
+#: 单批超时的**下限**。一批到底给多少秒，由 `_clamav_batch_timeout()` 按文件数算 ——
+#: 一刀切 120s 是**实测踩过的坑**：2026-09-27 真实分布实测里，320 个文件的批次
+#: （正常 76s）赶上台机器同时在跑另外两个 clamscan + 6 个 AI worker 时超过 120s，
+#: 结果是**整批 319 个文件一条结果行都没有** —— 17 个本该被 ClamAV 结案的恶意文件
+#: 全变成"未产出"，送审率会从 0.31% 跳到 3.4%、召回从 0.90 掉到 0.55。
+#: 那次是"核验铁律"那一行红字（`unreported` 计数）把它抓出来的。
 CLAMAV_TIMEOUT = 120
+#: 每个文件再给多少秒；一批的超时 = 夹在 [下限, 上限] 之间的 `文件数 × 它`。
+CLAMAV_TIMEOUT_PER_FILE = 2
+CLAMAV_TIMEOUT_MAX = 900
 #: 一次 `clamscan` 最多带多少个文件 / 命令行参数最长多少字节。
 #: Linux `ARG_MAX` 是 2MB 量级，这里留两个数量级余量 —— 路径长到离谱也不会炸。
 CLAMAV_BATCH_FILES = 400
@@ -648,6 +657,11 @@ def _run(cmd: list[str], timeout: int = CLAMAV_TIMEOUT):
     return subprocess.run(cmd, capture_output=True, timeout=timeout)
 
 
+def _clamav_batch_timeout(n_files: int) -> int:
+    """一批的超时秒数：`文件数 × 每文件配额`，夹在 `[CLAMAV_TIMEOUT, CLAMAV_TIMEOUT_MAX]` 之间。"""
+    return int(min(max(CLAMAV_TIMEOUT, n_files * CLAMAV_TIMEOUT_PER_FILE), CLAMAV_TIMEOUT_MAX))
+
+
 def _decode(proc) -> str:
     return ((proc.stdout or b"") + (proc.stderr or b"")).decode("utf-8", errors="replace")
 
@@ -717,6 +731,7 @@ def clamav_scan_batch(paths, runner=None) -> dict[str, Any]:
         kinds         `{malware, heuristic, pua}` 命中数（真病毒 vs 启发式 vs PUA 各多少）
         unreported    传进去但输出里没有的文件（**静默跳过**，必须为 0）
         invocations   起了几次 clamscan 进程（批量的证据就是它远小于文件数）
+        splits        因为超时被切成两半重试了几次（正常为 0；不为 0 说明机器很忙）
         elapsed_s     本批 ClamAV 总耗时
         engine        `clamav_engine_info()`（引擎版本 / 库版本 / 库文件）
 
@@ -730,7 +745,7 @@ def clamav_scan_batch(paths, runner=None) -> dict[str, Any]:
         "available": False, "results": {}, "scanned": 0, "found": 0,
         "kinds": {"malware": 0, "heuristic": 0, "pua": 0},
         "unreported": [str(p) for p in paths], "invocations": 0, "elapsed_s": 0.0,
-        "engine": {}, "error": "",
+        "splits": 0, "engine": {}, "error": "",
     }
     exe = _find_exe("clamscan", "clamdscan", env_var="CLAMAV_EXE")
     if not exe:
@@ -741,12 +756,25 @@ def clamav_scan_batch(paths, runner=None) -> dict[str, Any]:
     result["available"] = True
     result["engine"] = clamav_engine_info(runner=runner)
     started = time.time()
-    for chunk in _clamav_chunks(paths):
+    pending = list(_clamav_chunks(paths))
+    while pending:
+        chunk = pending.pop(0)
         known = {str(p) for p in chunk}
         cmd = [exe, "--no-summary", "--stdout", *[str(p) for p in chunk]]
         result["invocations"] += 1
         try:
-            proc = runner(cmd) if runner is not None else _run(cmd)
+            proc = (runner(cmd) if runner is not None
+                    else _run(cmd, _clamav_batch_timeout(len(chunk))))
+        except subprocess.TimeoutExpired as exc:
+            # **超时不等于这一批丢掉**：切成两半重试，切到单文件还超时才认输。
+            # 直接 `continue` 会把几百个文件一次变成"未产出"（踩过，见 CLAMAV_TIMEOUT 的注释）。
+            if len(chunk) > 1:
+                half = len(chunk) // 2
+                pending[0:0] = [chunk[:half], chunk[half:]]
+                result["splits"] += 1
+                continue
+            result["error"] = f"TimeoutExpired: {exc}"
+            continue
         except (OSError, subprocess.SubprocessError) as exc:
             result["error"] = f"{type(exc).__name__}: {exc}"
             continue

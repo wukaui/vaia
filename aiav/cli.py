@@ -146,6 +146,14 @@ def scan(
             if batch["unreported"]:
                 console.print(f"[red]⚠️ {len(batch['unreported'])} 个文件没有 ClamAV 结果行"
                               f"（静默跳过，按核验铁律这批要重跑）[/red]")
+            # 批次自己的报错必须吼出来：①层会把"没结果"记成"未产出"而不是"扫过且干净"，
+            # 但不吼的话，看到的就是一份安静的、送审率偏高的报告（2026-09-27 踩过）。
+            if batch.get("error"):
+                console.print(f"[red]⚠️ ClamAV 预扫报错：{batch['error']}"
+                              f"（这批文件按「未产出」记，不是「扫过且干净」）[/red]")
+            if batch.get("splits"):
+                console.print(f"[yellow]ClamAV 预扫超时切批重试 {batch['splits']} 次"
+                              f"（机器忙；结果仍然完整）[/yellow]")
     except Exception as exc:  # noqa: BLE001 - AV 预扫失败不该让整轮扫描跑不起来
         console.print(f"[yellow]ClamAV 预扫失败（{type(exc).__name__}: {exc}），退回单文件路径[/yellow]")
 

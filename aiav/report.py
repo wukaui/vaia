@@ -150,7 +150,11 @@ def build_summary(reports: list[FileReport]) -> dict[str, Any]:
             "unclassified_signals": sorted({s for r in reports for s in (r.unclassified_signals or [])})[:10],
             # 工具可用性（核验铁律：先验"工具真跑了吗"）。未安装的检测项直接列在报告抬头，
             # 免得读报告的人把"没报 AV 命中"读成"AV 查过了没有"。
-            "unavailable_detections": _unavailable_detections(),
+            "unavailable_detections": _unavailable_detections(reports),
+            # ClamAV 这一步的**批次账本**（2026-09-27）：引擎/库版本、扫了几个、命中几个、
+            # 静默跳过几个、批次报错。核验铁律要求"未安装 / 报错 / 静默降级计数不为 0"能一眼看见 ——
+            # 实测踩过：整批 319 个文件超时没结果行，报告里当时一点痕迹都没有。
+            "clamav": _clamav_summary(reports),
             "conclusive_producers": {
                 "DET_KNOWN_BAD_HASH": "内置哈希库（aiav/data/known_bad_hashes.txt）",
                 "DET_CLAMAV_SIGNATURE": "clamscan / clamdscan",
@@ -367,13 +371,72 @@ def _assemblyline_payload(reports: list[FileReport]) -> dict[str, Any]:
     }
 
 
-def _unavailable_detections() -> list[str]:
+def _unavailable_detections(reports: list["FileReport"] | None = None) -> list[str]:
+    """没装的检测项 + **跑失败了的**检测项。
+
+    后半截是 2026-09-27 补的：ClamAV 装了、但这一批没扫成（超时 / 起不来）时，
+    `DET_CLAMAV_SIGNATURE` 一条都不会命中，报告看上去跟"扫过且干净"一模一样 ——
+    必须在这里显式说出来，否则核验铁律那一条就是空话。
+    """
+    out: list[str] = []
     try:
         from aiav.tools import unavailable_detections
 
-        return unavailable_detections()
+        out += unavailable_detections()
     except Exception:  # noqa: BLE001
-        return []
+        pass
+    failed = sorted({str((r.clamav or {}).get("error"))
+                     for r in (reports or []) if (r.clamav or {}).get("error")})
+    if failed:
+        n = sum(1 for r in (reports or []) if (r.clamav or {}).get("error"))
+        out.append(f"ClamAV 预扫**没跑成**：{n} 个文件没有结果行"
+                   f"（{'；'.join(failed)[:200]}）—— 这批的 `DET_CLAMAV_SIGNATURE` 按「未产出」算，"
+                   f"不是「扫过且干净」")
+    return out
+
+
+def _clamav_summary(reports: list["FileReport"]) -> dict[str, Any]:
+    """把逐文件的 ClamAV 记录汇总成批次账本（报告抬头直接看）。"""
+    recs = [r.clamav for r in reports if r.clamav]
+    if not recs:
+        return {"recorded": False,
+                "note": "本轮没有 ClamAV 记录（没跑预扫，或引擎未安装）—— 不许读成「扫过且干净」"}
+    kinds: dict[str, int] = {}
+    for c in recs:
+        if c.get("infected"):
+            k = c.get("kind") or "malware"
+            kinds[k] = kinds.get(k, 0) + 1
+    errors: dict[str, int] = {}
+    for c in recs:
+        if c.get("error"):
+            errors[str(c["error"])] = errors.get(str(c["error"]), 0) + 1
+    return {
+        "recorded": True,
+        "files": len(recs),
+        "available": sum(1 for c in recs if c.get("available")),
+        "batched": sum(1 for c in recs if c.get("batch")),
+        "infected": sum(1 for c in recs if c.get("infected")),
+        "kinds": kinds,
+        # 核验铁律：这两个数**必须为 0**
+        "files_without_a_result_line": sum(
+            1 for c in recs if c.get("available") and "静默跳过" in str(c.get("error") or "")),
+        "files_with_a_batch_error": sum(1 for c in recs if c.get("error")),
+        "errors": dict(sorted(errors.items(), key=lambda kv: -kv[1])[:3]),
+        "engine": _clamav_engine_note(),
+    }
+
+
+def _clamav_engine_note() -> str:
+    """引擎版本 / 库版本 —— "装了 ClamAV"不等于"库是新的、真加载了"。"""
+    try:
+        from aiav.tools import clamav_engine_info
+
+        info = clamav_engine_info()
+        if not info.get("available"):
+            return ""
+        return f"{info.get('exe')} · {info.get('version')}"
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def load_criteria_stats() -> dict[str, Any]:

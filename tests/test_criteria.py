@@ -358,6 +358,58 @@ def test_clamav_batch_counts_files_without_a_result_line(tmp_path, monkeypatch):
     assert batch["unreported"] == [str(files[1])]
 
 
+def test_clamav_batch_splits_on_timeout_instead_of_losing_the_whole_batch(tmp_path, monkeypatch):
+    """**超时不是把整批丢掉**：切成两半重试（2026-09-27 实测踩过）。
+
+    那次真实分布实测里，320 个文件的批次赶上台机器同时在跑两个 clamscan + 6 个 AI worker，
+    超过 120s 的一刀切超时 → **整批 319 个文件一条结果行都没有**，17 个本该被 ClamAV 结案的
+    恶意文件全变成"未产出"。修法两条：按文件数给超时 + 超时切批重试。
+    """
+    import subprocess
+
+    files = [tmp_path / n for n in ("a.exe", "b.exe", "c.exe", "d.exe")]
+    tools, _ = _fake_clamscan(tmp_path, monkeypatch, b"")
+    calls: list[list[str]] = []
+
+    def runner(cmd):
+        paths = cmd[3:]
+        calls.append(paths)
+        if len(paths) > 2:
+            raise subprocess.TimeoutExpired(cmd, 1)
+        return _FakeProc("".join(f"{p}: OK\n" for p in paths).encode())
+
+    batch = tools.clamav_scan_batch(files, runner=runner)
+    assert batch["scanned"] == 4 and batch["unreported"] == []   # 一个都没丢
+    assert batch["splits"] == 1
+    assert batch["invocations"] == 3                             # 1 次超时 + 2 次半批
+    assert sorted(len(c) for c in calls if c) == [2, 2, 4]   # 引擎版本那一次调用不算（没有文件参数）
+
+
+def test_clamav_single_file_timeout_is_an_error_not_clean(tmp_path, monkeypatch):
+    """切到单文件还超时 → 记 `error` 且该文件留在 `unreported` 里，**不许读成"扫过且干净"**。"""
+    import subprocess
+
+    files = [tmp_path / "a.exe"]
+    tools, _ = _fake_clamscan(tmp_path, monkeypatch, b"")
+
+    def runner(cmd):
+        raise subprocess.TimeoutExpired(cmd, 1)
+
+    batch = tools.clamav_scan_batch(files, runner=runner)
+    assert batch["scanned"] == 0
+    assert batch["unreported"] == [str(files[0])]
+    assert "TimeoutExpired" in batch["error"]
+
+
+def test_clamav_batch_timeout_scales_with_the_number_of_files():
+    """一批的超时按文件数给，不是一刀切 120s。"""
+    from aiav import tools
+
+    assert tools._clamav_batch_timeout(1) == tools.CLAMAV_TIMEOUT
+    assert tools._clamav_batch_timeout(320) == 640
+    assert tools._clamav_batch_timeout(100000) == tools.CLAMAV_TIMEOUT_MAX
+
+
 def test_clamav_heuristic_hit_is_suspicious_not_conclusive():
     """启发式命中**不算 1000 分**：送 AI 复核，永远不结案。"""
     hit = C.CriterionHit("DET_CLAMAV_HEUR", "ClamAV 启发式命中: Heur.AdvML.B",
@@ -451,3 +503,33 @@ def test_scanner_scans_every_extension_in_batch_mode(tmp_path):
 
     ev = scanner.quick_prefilter(p, scanner.compute_sha256(p), clamav_batch=batch)
     assert ev.deterministic["disposition"] == "closed_malicious"
+
+
+def test_report_shows_a_failed_clamav_batch_instead_of_looking_clean():
+    """**整批 ClamAV 没跑成时，报告抬头必须写出来**（2026-09-27 实测踩过的坑）。
+
+    那一轮：320 个文件的批次超时 → 319 个文件没有结果行 → 送审率从 0.31% 跳到 3.45%、
+    召回从 0.90 掉到 0.55，而报告里当时**一点痕迹都没有**（跟"扫过且干净"长得一样）。
+    """
+    from aiav import report as R
+    from aiav.models import FileReport, RiskLevel, Verdict
+
+    def _rec(error: str) -> FileReport:
+        return FileReport(
+            path="/x/a.exe", sha256="0" * 64, size=1, extension=".exe", prefilter_score=0,
+            verdict=Verdict(risk=RiskLevel.clean, confidence=1.0, category="clean",
+                            summary="", evidence=[], recommended_action="ignore"),
+            clamav={"available": True, "infected": False, "signature": "", "kind": "",
+                    "batch": True, "error": error})
+
+    silent = _rec("本批 ClamAV 没有这个文件的结果（静默跳过，不是扫过且干净）")
+    summary = R._clamav_summary([silent])
+    assert summary["recorded"] is True
+    assert summary["files_with_a_batch_error"] == 1
+    assert summary["files_without_a_result_line"] == 1          # 核验铁律：这个数必须为 0
+    assert any("没跑成" in s for s in R._unavailable_detections([silent]))
+
+    ok = _rec("")
+    assert R._clamav_summary([ok])["files_with_a_batch_error"] == 0
+    assert not any("没跑成" in s for s in R._unavailable_detections([ok]))
+    assert R._clamav_summary([])["recorded"] is False
