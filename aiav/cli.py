@@ -409,6 +409,90 @@ def whitelist_remove(
     console.print(f"[green]移除 {res['removed']} 条[/green]" if res["removed"] else "[yellow]没找到该 sha256[/yellow]")
 
 
+@app.command("triage")
+def triage_cmd(
+    path: Path = typer.Argument(..., exists=True, file_okay=True, dir_okay=True, readable=True,
+                                help="要初筛的文件或目录"),
+    model: str | None = typer.Option(None, "--model", help="覆盖 AGENT_MODEL（**应该用便宜档**）"),
+    base_url: str | None = typer.Option(None, "--base-url"),
+    threshold: int = typer.Option(
+        60, "--threshold",
+        help="可疑度分达到多少算「该送深度 AI」。默认 60 是 Dike 400 灰区上**算出来**的"
+             "（约束：良性送审率 ≤10%，此时召回 0.733）—— 换语料要重算，别照搬。"),
+    workers: int = typer.Option(6, "--workers", "-w"),
+    max_prompt_tokens: int = typer.Option(1000, "--max-prompt-tokens",
+                                          help="单文件摘要的 token 预算（成本闸）"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="关掉 sha256 缓存"),
+    cache_dir: Path | None = typer.Option(None, "--cache-dir"),
+    show_all: bool = typer.Option(False, "--show-all", help="列出全部文件（默认只列达到门槛的）"),
+) -> None:
+    """LLM 初筛：只喂**最小摘要**（≤1000 token/文件）拿一个 0~100 的可疑度分。
+
+    这一层**独立于深度 AI**，也不改任何判据/闸门：它只回答"哪些文件值得花钱深挖"。
+    只读静态分析：不执行样本、不上传、不落地。
+    """
+    from aiav.cache import TriageCache, default_triage_cache_dir, cache_enabled
+    from aiav.scanner import iter_files
+    from aiav.triage import TriageClient, run_batch, summarize_cost
+
+    files = ([path] if path.is_file()
+             else list(iter_files(path, max_size_mb=200, include_system=True)))
+    if not files:
+        console.print("[yellow]没有可初筛的文件[/yellow]")
+        return
+    try:
+        client = TriageClient(model=model, base_url=base_url)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    cache = None if (no_cache or not cache_enabled()) else TriageCache(
+        root=cache_dir or default_triage_cache_dir())
+    console.print(f"[green]LLM 初筛：{client.model}[/green] · {len(files)} 个文件 · "
+                  f"摘要预算 {max_prompt_tokens} token/文件 · "
+                  f"门槛 {threshold} · 缓存 {'关' if cache is None else cache.root}")
+
+    items = [(f, compute_sha256(f)) for f in files]
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+                  BarColumn(), TextColumn("{task.completed}/{task.total}"),
+                  TimeElapsedColumn(), console=console) as progress:
+        task = progress.add_task("初筛中", total=len(items))
+
+        def tick(_record: dict) -> None:
+            progress.advance(task)
+
+        results = run_batch(items, client, workers=workers,
+                            max_prompt_tokens=max_prompt_tokens, cache=cache,
+                            on_result=tick)
+
+    cost = summarize_cost(results)
+    hits = [r for r in results if (r.get("score") or -1) >= threshold]
+    table = Table(title=f"LLM 初筛结果（门槛 {threshold}；列出 {len(hits)}/{len(results)}）")
+    for col in ("可疑度", "判定", "大小", "类型", "理由", "文件"):
+        table.add_column(col, overflow="fold")
+    for r in sorted(results, key=lambda x: -(x.get("score") or -1)):
+        if not show_all and (r.get("score") or -1) < threshold:
+            continue
+        score = r.get("score")
+        mark = "[red]送深度AI[/red]" if score is not None and score >= threshold else "[green]不送[/green]"
+        table.add_row(str(score) if score is not None else "[red]失败[/red]", mark,
+                      f"{(r.get('summary') or {}).get('size', 0) // 1024}KB",
+                      str((r.get("summary") or {}).get("kind", "?")),
+                      (r.get("reason") or r.get("error") or "")[:160], r["path"])
+    console.print(table)
+
+    console.print(f"[cyan]成本：{cost['total_tokens']:,} token（均 {cost['avg_tokens_per_file']} /文件）"
+                  f" · ¥{cost['cost_cny']} · 单价口径 "
+                  f"¥{cost['cny_per_million_tokens']}/百万[/cyan]")
+    # 核验铁律：error / 降级计数不为 0 的批次不能用
+    flag = "[red]⚠️ 有失败条目，这批不可用[/red]" if cost["failed"] else "[green]0 失败[/green]"
+    console.print(f"[cyan]核验：成功 {cost['ok']} / 失败 {cost['failed']} / 缓存命中 "
+                  f"{cost['from_cache']} / usage {cost['usage_source']} / "
+                  f"解析档 {cost['parse_modes']}[/cyan] {flag}")
+    if cost.get("summary_over_budget"):
+        console.print(f"[yellow]⚠️ {cost['summary_over_budget']} 个文件摘要超出预算上限[/yellow]")
+
+
 @app.command("history")
 def history_cmd(
     limit: int = typer.Option(20, "--limit", "-n", help="显示最近多少条"),

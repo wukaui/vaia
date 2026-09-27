@@ -245,6 +245,115 @@ class ScanCache:
                 "enabled": self.enabled, "fingerprints": self.current_fingerprints()}
 
 
+TRIAGE_CACHE_VERSION = "1"   # 改初筛摘要/提示词/解析口径时 +1
+
+
+class TriageCache(ScanCache):
+    """LLM 初筛层的缓存（同 sha256 不重算）。
+
+    为什么要独立一个类，而不是复用 `ScanCache`：
+      · `ScanCache` 存的是 `FileReport`（深度 AI 的结论），指纹里带着规则/ClamAV/白名单 ——
+        初筛只依赖**摘要版本 + 提示词 + 模型名**，把 ClamAV 库版本扯进来只会让缓存天天失效；
+      · 更要紧的是**不能互相顶替**：初筛结果不是扫描结论，落进同一个条目空间会被
+        深度 AI 那条路径当成"这个文件已经扫过了"（正是本项目反复踩的"静默跳过"类坑）。
+    复用的是**同一套机制**：sha256 当键、指纹失效、原子写、每文件一条 JSON。
+    """
+
+    def __init__(self, root: Path | None = None, enabled: bool = True,
+                 store_root: Path | None = None) -> None:
+        super().__init__(root=root, enabled=enabled, store_root=store_root)
+
+    @property
+    def fingerprints(self) -> dict[str, str]:
+        if self._fp is None:
+            from aiav.triage import SYSTEM_PROMPT, TRIAGE_VERSION
+
+            self._fp = {
+                "version": TRIAGE_CACHE_VERSION,
+                "triage": TRIAGE_VERSION,
+                "prompt": hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest()[:16],
+            }
+        return self._fp
+
+    def current_fingerprints(self) -> dict[str, str]:
+        return dict(self.fingerprints)
+
+    def _key(self, sha256: str, model: str) -> str:
+        return f"{sha256.lower()}.{model}"
+
+    def _path(self, sha256: str, model: str = "") -> Path:  # type: ignore[override]
+        return self.root / f"{self._key(sha256, model)}.json"
+
+    def get_triage(self, sha256: str, *, model: str, samples: int = 1) -> dict[str, Any] | None:
+        if not self.enabled or not sha256:
+            return None
+        path = self._path(sha256, model)
+        if not path.is_file():
+            return None
+        try:
+            entry = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        meta = entry.get("meta") or {}
+        if meta.get("fingerprints") != self.current_fingerprints():
+            return None
+        if meta.get("model") != model:
+            return None
+        if sample_count(meta) < max(1, samples):
+            return None
+        return entry
+
+    def put_triage(self, sha256: str, result: dict[str, Any], *, model: str,
+                   samples: int = 1) -> bool:
+        if not self.enabled or not sha256:
+            return False
+        entry = {
+            "meta": {
+                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "fingerprints": self.current_fingerprints(),
+                "model": model,
+                "samples": max(1, samples),
+                "cache_version": TRIAGE_CACHE_VERSION,
+            },
+            "result": result,
+        }
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            final = self._path(sha256, model)
+            tmp = final.with_suffix(final.suffix + f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+            try:
+                tmp.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
+                os.replace(tmp, final)
+            finally:
+                if tmp.exists():
+                    try:
+                        tmp.unlink()
+                    except OSError:
+                        pass
+            return True
+        except OSError:
+            return False
+
+    def clear(self) -> int:
+        if not self.root.is_dir():
+            return 0
+        n = 0
+        for f in self.root.glob("*.json"):
+            try:
+                f.unlink()
+                n += 1
+            except OSError:
+                continue
+        return n
+
+
+def default_triage_cache_dir() -> Path:
+    from aiav.disposition import default_store
+
+    return Path(os.getenv("AI_AV_TRIAGE_CACHE_DIR",
+                          str(default_store().root / "triage-cache")))
+
+
 def sample_count(meta: dict[str, Any]) -> int:
     try:
         return int(meta.get("samples") or 1)
