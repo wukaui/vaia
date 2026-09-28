@@ -24,6 +24,10 @@ Dike 400（200 恶意 + 200 良性）上的预筛分数分布：
    摘要只给：文件名 + 大小 + 扩展名 + 熵 + 布局（段表/流表）摘要 + 前 N 个字符串
    + 导入表摘要。**不给任何规则分数、不给判据名** —— 给了就是泄题，LLM 会去复述规则
    （预筛分数与它自己的分数高度共线，等于白花钱）。
+   **例外且只有一处（2026-09-27）**：`kind == "pdf"` 走**单独一条解析路径**
+   （`_pdf_summary`）—— PDF 正文是压缩流，"前 20 条字符串"全是乱码，摘要等于没给
+   信息（实测批次 A：PDF 召回 0.283，同批 vbs/js 是 1.000）。PDF 改给结构面 +
+   动作 + 内嵌文件 + 外链 + **解压后可读的 JS 代码**；其它类型的摘要渲染一个字没改。
 2. **输出是 0~100 的分数，不是三分类**。分数才能排序、才能算 AUC、才能"用数据定门槛"。
    理由只是一句话，用来事后解释，不参与路由。
 3. **预算守门**：摘要渲染后按 token 计数，超预算就**从字符串尾部往前砍**，
@@ -60,9 +64,21 @@ load_dotenv(Path.home() / ".config" / "aiav" / ".env")
 
 # ---------------------------------------------------------------- 调参常量
 #: 摘要结构版本。改摘要字段/提示词/解析口径都要 +1，让旧缓存整体失效。
-TRIAGE_VERSION = "1"
+#: v2（2026-09-27）：PDF 走**单独一条解析路径**（结构面 + 解压后的 JS 代码 +
+#: 动作/内嵌文件/URI），字符串档位从 20 收到 8。其它类型的摘要渲染**一个字没改**。
+TRIAGE_VERSION = "2"
 #: 摘要里最多给几条字符串（任务给的 N，目标 ≤20 条）。
 MAX_STRINGS = 20
+#: **PDF 专用**：字符串只给 8 条。PDF 正文是压缩流，"前 20 条字符串"几乎全是
+#: 解压后的二进制碎片 —— 实测（批次 A，mb-pdf 60 个全恶意）②层在 PDF 上召回
+#: 0.283，而同一批 vbs/js 是 1.000。预算要让给结构面与**解压后的 JS 代码**。
+MAX_STRINGS_PDF = 8
+#: PDF 摘要里 JS 代码片段 / URI / 内嵌文件 / 可疑模式的条数上限。
+PDF_JS_SNIPPETS = 3
+PDF_URI_MAX = 5
+PDF_EMBEDDED_MAX = 5
+#: 单条 JS 片段最长字符数（一条 base64 blob 能吃掉整份预算）。
+PDF_JS_CHARS = 240
 #: 单文件提示词的 token 目标（硬上限靠 `TRIAGE_MAX_PROMPT_TOKENS` 覆盖）。
 TARGET_PROMPT_TOKENS = 1000
 #: 摘要最多读进内存的字节数（熵/字符串只在前 1MB 上算 —— 成本与代表性之间取的档）。
@@ -317,6 +333,162 @@ def _ole_summary(path: Path, summary: dict[str, Any]) -> None:
         return
 
 
+# ---------------------------------------------------------------- PDF 专用摘要
+#: 从①层（pypdf 走对象树）拿到的字典 repr 里把 JS 正文抠出来。
+#: 例：`{'/JS': 'app.alert("x");', '/S': '/JavaScript'}` → `app.alert("x");`
+#: 两种引号都要认（repr 里单双引号都可能出现），**不能按第一个引号截断** ——
+#: JS 正文自己就带引号（`{cName:"e.exe"}`），截断会把代码切坏。
+_JS_FROM_REPR_RE = re.compile(
+    r"""['"]/JS['"]\s*:\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")"""
+)
+#: 判"这段解出来的是不是**可读的 JS 代码**"（解压失败的流是二进制碎片，喂给模型
+#: 只会制造噪声 —— 那正是旧摘要在 PDF 上失效的原因）。
+_JS_HINT_TOKENS = ("(", "=", ";", "{", "}", ".", "function", "var ", "this")
+#: JS 片段的**可疑度**排序（与 `pdfscan.PDF_PATTERNS` 同一套信号的强档）。
+#: 注意：这只是"先给模型看哪几条"的排序，不是判据、不计分。
+_JS_SUSPICIOUS_TOKENS = (
+    "app.launchURL", "exportDataObject", "submitForm", "eval(", "unescape",
+    "String.fromCharCode", "getURL", "util.printf", "this.exportDataObject",
+    "%u9090", "com.adobe.acrobat", "Collab.getIcon",
+)
+
+
+def _clean_js_blob(text: str) -> str:
+    """把①层解出来的东西洗成"像 JS 代码"的样子。**只做字符串处理，不 eval、不执行。**"""
+    text = (text or "").strip()
+    match = _JS_FROM_REPR_RE.search(text)
+    if match:
+        text = match.group(1) if match.group(1) is not None else match.group(2)
+    # 解压出来的 JS 里 `\n` 常是**两个字符**（反斜杠 + n）而不是真换行
+    for escaped, plain in (("\\r\\n", " "), ("\\n", " "), ("\\r", " "), ("\\t", " ")):
+        text = text.replace(escaped, plain)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _readable_js(text: str) -> bool:
+    """这段解出来的东西**可读**吗（可读才值得喂给模型）。"""
+    if len(text) < 12:
+        return False
+    printable = sum(1 for ch in text if ch.isprintable() or ch in "\t\n ")
+    if printable / len(text) < 0.9:
+        return False
+    return any(tok in text for tok in _JS_HINT_TOKENS)
+
+
+def _js_snippets(blobs: Iterable[str],
+                 limit: int = PDF_JS_SNIPPETS) -> tuple[list[str], int, int]:
+    """从①层解出来的 JS 里挑几条**真正可读的代码**。
+
+    返回 `(片段, 可读段数, 原始块数)` —— 三个数都要留痕：只报"挑了几条"会把
+    "根本没有 JS" 和 "有 JS 但全解不开" 混成同一件事（后者对研判有意义）。
+
+    挑选口径（为什么这么排）：
+      ① 先按可读度过滤 —— 解压失败的流是二进制碎片；
+      ② 再按可疑度排序 —— 带 `app.launchURL` / `exportDataObject` / `eval` 这些串的
+         片段优先（与 `pdfscan.PDF_PATTERNS` 同一套信号）；
+      ③ 剩下的按**原文顺序**兜底，保证"有 JS 但没命中模式"的文件也能给出代码；
+      ④ 折叠空白 + 截断 —— 一条 base64 blob 能吃掉整份摘要预算。
+    """
+    seen: set[str] = set()
+    readable: list[tuple[int, int, str]] = []
+    raw_total = 0
+    for index, blob in enumerate(blobs):
+        raw_total += 1
+        text = _clean_js_blob(blob)
+        if not _readable_js(text) or text in seen:
+            continue
+        seen.add(text)
+        score = sum(1 for token in _JS_SUSPICIOUS_TOKENS if token in text)
+        readable.append((-score, index, text[:PDF_JS_CHARS]))
+    readable.sort(key=lambda item: (item[0], item[1]))
+    return [text for _score, _index, text in readable[:limit]], len(seen), raw_total
+
+
+def _pdf_summary(path: Path, summary: dict[str, Any]) -> None:
+    """PDF：**单独一条解析路径**（只在 `kind == "pdf"` 时走，别的类型一个字不改）。
+
+    为什么必须单列：PDF 的正文是压缩流，`extract_strings()` 在前 1MB 上捞到的
+    "字符串"几乎全是解压后的二进制碎片 —— 摘要等于没给信息。而①层其实**认识** PDF
+    （`criteria.py` 有 `PDF_JS` / `PDF_EMBEDDED_FILE` / `PDF_URI` 等 7 条判据，
+    `pdfscan.analyze_pdf()` 会把 JS 解压出来），**只是②层的摘要没把这些喂进去** ——
+    这就是"①层看得到、②层看不见"的错配。
+
+    这里做的事：把①层已经算过的东西（动作 / 内嵌文件 / URI / XFA / 解压后的 JS）
+    取过来，再补一层①层没给的结构面（对象数 / 流数 / 加密 / ObjStm / 版本），
+    整理成②层看得懂的摘要。**只读静态：不渲染、不打开、不执行 PDF。**
+    """
+    try:
+        from aiav.pdfscan import (
+            RISKY_EMBEDDED_EXTS,
+            analyze_pdf,
+            raw_js_literals,
+            structure_info,
+        )
+    except Exception as exc:  # noqa: BLE001 - 模块不可用：如实记账，不猜
+        summary["pdf"] = {"errors": [f"pdfscan 不可用: {type(exc).__name__}: {exc}"[:120]]}
+        return
+
+    pdf: dict[str, Any] = {"errors": []}
+    try:
+        structure = structure_info(path)
+        pdf["structure"] = {
+            "engine": structure.get("engine"),
+            "version": structure.get("version") or "",
+            "header": structure.get("header") or "",
+            "objects": structure.get("objects", 0),
+            "streams": structure.get("streams", 0),
+            "encrypted": bool(structure.get("encrypted")),
+            "objstm": structure.get("objstm", 0),
+            "pages": structure.get("pages", 0),
+            "counts": structure.get("counts") or {},
+        }
+        pdf["errors"].extend(structure.get("errors") or [])
+    except Exception as exc:  # noqa: BLE001
+        pdf["errors"].append(f"结构面解析失败: {type(exc).__name__}: {exc}"[:120])
+
+    try:
+        info = analyze_pdf(path)
+        pdf["errors"].extend(info.get("errors") or [])
+        pdf["pages"] = info.get("pages") or 0
+        # 页数两个来源：pdfid 数 `/Page` 关键字（未解压），pypdf 走对象树。
+        # 任一拿到就用，两个都拿到取大的 —— 写 0 是**错的**（405 个对象的 PDF 不是 0 页）。
+        if pdf.get("structure") is not None and not pdf["structure"].get("pages"):
+            pdf["structure"]["pages"] = pdf["pages"]
+        pdf["actions"] = list(info.get("actions") or [])
+        pdf["uris"] = list(dict.fromkeys(info.get("uris") or []))[:PDF_URI_MAX]
+        pdf["patterns"] = list(info.get("patterns") or [])
+        pdf["xfa"] = bool(info.get("xfa"))
+
+        embedded: list[dict[str, Any]] = []
+        for item in (info.get("embedded_files") or [])[:PDF_EMBEDDED_MAX]:
+            name = str(item.get("name") or "")
+            suffix = Path(name).suffix.lower()
+            embedded.append({
+                "name": name[:80],
+                "size": int(item.get("size") or 0),
+                "risky": suffix in RISKY_EMBEDDED_EXTS,
+            })
+        pdf["embedded_files"] = embedded
+
+        # JS 有两个来源，**互补**（实测 mb-pdf 60 个）：
+        #   · pypdf 走对象树能解压 ObjStm 里的 JS（12/60 拿到）—— pdfid 数不到这些；
+        #   · 原始 `/JS (…)` 字面量在"xref 坏了"的投递样本上仍然可读（7/60）。
+        blobs: list[str] = list(info.get("javascript") or [])
+        try:
+            blobs.extend(raw_js_literals(path.read_bytes(), limit=8))
+        except OSError as exc:
+            pdf["errors"].append(f"原始字节读取失败: {type(exc).__name__}: {exc}"[:120])
+        snippets, readable_total, raw_total = _js_snippets(blobs)
+        pdf["js_snippets"] = snippets
+        pdf["js_total"] = readable_total
+        pdf["js_blocks"] = raw_total
+    except Exception as exc:  # noqa: BLE001
+        pdf["errors"].append(f"可执行面解析失败: {type(exc).__name__}: {exc}"[:120])
+
+    pdf["errors"] = sorted(set(str(e) for e in pdf["errors"] if e))[:4]
+    summary["pdf"] = pdf
+
+
 def build_summary(path: Path, sha256: str = "") -> dict[str, Any]:
     """构建**最小摘要**（这是喂给模型的东西，也是成本的全部来源）。
 
@@ -357,8 +529,15 @@ def build_summary(path: Path, sha256: str = "") -> dict[str, Any]:
         ".docm", ".xlsm", ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt", ".rtf", ".lnk"
     }:
         _ole_summary(path, summary)
+    elif summary["kind"] == "pdf":
+        # PDF **单独一条解析路径**（2026-09-27）。走这条分支的只有 kind == "pdf" ——
+        # vbs/js/bat（script）、rtf/xls（ole / other）的摘要渲染与字段**一个字没改**。
+        _pdf_summary(path, summary)
 
-    summary["strings"] = extract_strings(blob, MAX_STRINGS)
+    # PDF 的字符串档位单独收窄（见 `MAX_STRINGS_PDF`）：PDF 正文是压缩流，
+    # 20 条乱码字符串白占预算，而预算要留给结构面与解压后的 JS。别的类型仍走 20。
+    strings_limit = MAX_STRINGS_PDF if summary["kind"] == "pdf" else MAX_STRINGS
+    summary["strings"] = extract_strings(blob, strings_limit)
     summary["strings_total_seen"] = len(summary["strings"])
     return summary
 
@@ -376,6 +555,70 @@ def _count_tokens(text: str) -> int:
         return len(tiktoken.get_encoding("cl100k_base").encode(text))
     except Exception:  # noqa: BLE001
         return max(1, len(text) // 4)
+
+
+def _render_pdf_block(pdf: dict[str, Any]) -> list[str]:
+    """PDF 事实块（**只印事实**：没有判据名、没有分数、没有规则命中 —— 给了就是泄题）。
+
+    ⚠️ 有意不印 `pdf["patterns"]`：那几条（`PDF JS: eval` 之类）就是 `criteria.py`
+    里 `PDF_PATTERN` 判据的命中标签，印出来等于把①层的规则结论喂回去，
+    与"不给判据名"这条设计红线冲突。模型要看的是**原始事实**（JS 代码本身、
+    动作、外链、内嵌文件、结构面），不是我们的规则怎么说。
+    """
+    out: list[str] = []
+    structure = pdf.get("structure") or {}
+    if structure:
+        out.append(
+            "PDF 结构: "
+            f"版本={structure.get('version') or '?'} "
+            f"对象={structure.get('objects', 0)} 流={structure.get('streams', 0)} "
+            f"页={structure.get('pages', 0)} "
+            f"加密={'是' if structure.get('encrypted') else '否'} "
+            f"ObjStm={structure.get('objstm', 0)}"
+            f"（结构面引擎: {structure.get('engine') or '?'}）"
+        )
+        counts = structure.get("counts") or {}
+        named = {
+            "js": "/JS", "javascript": "/JavaScript", "openaction": "/OpenAction",
+            "aa": "/AA", "launch": "/Launch", "embeddedfile": "/EmbeddedFile",
+            "richmedia": "/RichMedia", "xfa": "/XFA", "acroform": "/AcroForm",
+        }
+        hits = [f"{named[key]}×{value}" for key, value in counts.items()
+                if key in named and value]
+        if hits:
+            out.append("PDF 明文关键字计数（未解压口径）: " + ", ".join(hits))
+    actions = pdf.get("actions") or []
+    if actions:
+        out.append("PDF 动作（解引用对象树后）: " + ", ".join(str(a) for a in actions[:12]))
+    if pdf.get("xfa"):
+        out.append("PDF 含 XFA 表单（可脚本化）")
+    embedded = pdf.get("embedded_files") or []
+    if embedded:
+        out.append("PDF 内嵌文件: " + " | ".join(
+            f"{item.get('name')}({item.get('size')}B"
+            f"{'，可执行/脚本类型' if item.get('risky') else ''})"
+            for item in embedded))
+    uris = pdf.get("uris") or []
+    if uris:
+        out.append(f"PDF 外链动作(URI) {len(uris)} 条:")
+        out.extend(f"  · {uri}" for uri in uris)
+    snippets = pdf.get("js_snippets") or []
+    readable_total = int(pdf.get("js_total") or 0)
+    raw_total = int(pdf.get("js_blocks") or 0)
+    if snippets:
+        out.append(
+            f"PDF JavaScript 片段（解压后可读 {readable_total} 段 / 原始 JS 块 {raw_total} 个，"
+            f"下面是最可疑的 {len(snippets)} 段）:"
+        )
+        out.extend(f"  · {snippet}" for snippet in snippets)
+    elif raw_total:
+        out.append(
+            f"PDF JavaScript: 解出 {raw_total} 个 JS 块但**都不可读**（解压失败 / 二进制碎片）"
+        )
+    errors = pdf.get("errors") or []
+    if errors:
+        out.append("PDF 解析异常（**解不开 ≠ 安全**）: " + "; ".join(str(e) for e in errors[:3]))
+    return out
 
 
 def render_user_prompt(summary: dict[str, Any]) -> str:
@@ -405,8 +648,17 @@ def render_user_prompt(summary: dict[str, Any]) -> str:
             f"PE: 入口点 RVA={flags['entry_rva']} machine={flags['machine']} "
             f".NET={'是' if flags['dotnet'] else '否'}"
         )
+    pdf = summary.get("pdf")
+    if pdf:
+        lines.extend(_render_pdf_block(pdf))
     strings = summary.get("strings") or []
-    lines.append(f"字符串（文件偏移顺序前 {len(strings)} 条）:")
+    if pdf:
+        lines.append(
+            f"字符串（文件偏移顺序前 {len(strings)} 条；PDF 正文多数是压缩流，"
+            "这一段是**未解压的原始字节**，不代表文件内容）:"
+        )
+    else:
+        lines.append(f"字符串（文件偏移顺序前 {len(strings)} 条）:")
     for s in strings:
         lines.append(f"  · {s}")
     return "\n".join(lines)
@@ -461,6 +713,22 @@ def render_prompt(
             strings = strings[:-cut]
             truncated = True
             continue
+        # PDF 分支（只在 `summary["pdf"]` 存在时进入，别的类型走不到这里）：
+        # 字符串砍光还超预算时，先收 URI / 内嵌文件，**至少留 1 段 JS 代码** ——
+        # 那是这一层在 PDF 上最值钱的东西（见 `_pdf_summary`）。再超才退到骨架瘦身。
+        if working.get("pdf") and not working.get("_pdf_trimmed"):
+            pdf = dict(working["pdf"])
+            changed = False
+            for key, keep in (("uris", 2), ("embedded_files", 2), ("js_snippets", 1)):
+                items = list(pdf.get(key) or [])
+                if len(items) > keep:
+                    pdf[key] = items[:keep]
+                    changed = True
+            working["_pdf_trimmed"] = True
+            if changed:
+                working["pdf"] = pdf
+                truncated = True
+                continue
         if not working.get("_skeleton_trimmed"):
             layout = list(working.get("layout") or [])
             if len(layout) > 8:
@@ -476,6 +744,7 @@ def render_prompt(
         break
 
     working.pop("_skeleton_trimmed", None)
+    working.pop("_pdf_trimmed", None)
     return RenderedPrompt(
         system=system,
         user=user,
@@ -818,7 +1087,7 @@ def triage_one(
         "summary": {
             k: v for k, v in prompt.summary.items()
             if k in ("name", "size", "extension", "kind", "entropy", "layout",
-                     "imports", "pe_flags", "macro_store", "read_error")
+                     "imports", "pe_flags", "macro_store", "read_error", "pdf")
         },
         "from_cache": False,
     }

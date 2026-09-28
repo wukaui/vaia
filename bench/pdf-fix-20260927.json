@@ -1,0 +1,633 @@
+{
+ "batch_id": "pdf-fix-20260927",
+ "batch_title": "PDF 盲区修复（只测 PDF）：mb-pdf 60 恶 + 良性 PDF 语料（alt-forms 去重 + 系统文档）",
+ "discipline": "一批一产物；每个数字都带批次；分母写清；**不做跨批合并指标**。全恶意批次没有误报率，全良性批次没有召回。",
+ "corpus": {
+  "malicious": {
+   "name": "~/ai-av-bench/mb-pdf",
+   "files": 60,
+   "kind": "纯恶意",
+   "note": "**参与过批次 A 的测量**（mb280-scriptdoc 的 pdf 那一类），所以本轮的结论只能说「在这批上的改善」。"
+  },
+  "benign": {
+   "name": "/tmp/pdf-fix/corpus/benign",
+   "files": 70,
+   "kind": "纯良性",
+   "manifest": "/tmp/pdf-fix/corpus/benign/manifest.json",
+   "note": "alt-forms-benign（项目自造良性文档语料，标签全 clean，60 个文件按 sha256 去重后 50 个唯一）+ 系统与开源文档 20 个。私人文档与 PoC 已刻意排除。"
+  }
+ },
+ "baseline_batch_a": {
+  "batch": "mb280-scriptdoc",
+  "arm": "r1",
+  "config": "--ai-threshold 200 --ai-threshold-low 0 --deep-evidence-threshold 300",
+  "pdf_files": 60,
+  "pdf_recall": 0.2833,
+  "pdf_hits": 17,
+  "pdf_layer1_closed_malicious": 3,
+  "pdf_sent_to_ai": 14,
+  "pdf_triage_candidates": 3,
+  "pdf_triage_selected": 2,
+  "pdf_silent_pass_lt125": 42,
+  "pdf_gate_direct_ge200": 12
+ },
+ "arm_old": {
+  "arm": "②层臂 · 旧摘要（批次A 那一版）",
+  "summary_module": "/tmp/pdf-fix/triage_old.py",
+  "triage_version": "1",
+  "model": "deepseek-v4.1-flash",
+  "threshold": 60,
+  "labels": {
+   "malicious": {
+    "files": 60,
+    "scored": 60,
+    "selected": 12,
+    "selected_names": [
+     "26151e6df5ac089a79eecf4032e375e51d50b319ed671c1dadec522a945c9264.pdf",
+     "47b589605189793bba57129495dfa7367f79f9d6b366372386bb83ec991936a3.pdf",
+     "5095c6478dbb7f167c637511536ddc9bdc60828cc7c323041c68a2918eb351e8.pdf",
+     "54077a5b15638e354fa02318623775b7a1cc0e8c21e59bcbab333035369e377f.pdf",
+     "5f5aa2aaf7c38331ac90dd06e2bbf0a9603edfac51a98084d671f569cb218b99.pdf",
+     "6504e90f463974d97e7ebf401d4c1a557ed6c06bae143718d6f74b5f9ae50952.pdf",
+     "65dca34b04416f9a113f09718cbe51e11fd58e7287b7863e37f393ed4d25dde7.pdf",
+     "693ea9f0837c9e0c0413da6198b6316a6ca6dfd9f4d3db71664d2270a65bcf38.pdf",
+     "9b14d367c99b7d9187a58406ad3eb55e2dee12b4b2bc341f9058c622b7b87fa3.pdf",
+     "a54d2448c10f63a4949e0f5ae4430cf60e2f13b543e2cf6bdd052a99f8fec461.vbs",
+     "b046d04b61f3ebfd9410c8b4f365118e29470fb6c54529c2425f553eb6364d8e.pdf",
+     "ef85bfb534a2d679261902aab71e24dde3c5c9b7950e300dd0df298dfddddc02.pdf"
+    ],
+    "min": 5,
+    "median": 30,
+    "max": 95,
+    "mean": 33.9,
+    "ge50": 15,
+    "ge70": 10,
+    "est_tokens_median_summary": 856.0,
+    "prompt_tokens_per_file": 706.9,
+    "completion_tokens_per_file": 333.3,
+    "total_tokens_per_file": 1118.9,
+    "strings_used_mean": 19.3,
+    "summary_truncated": 8,
+    "cny": 0.5371,
+    "recall_at_threshold": 0.2,
+    "hits": 12
+   },
+   "clean": {
+    "files": 70,
+    "scored": 70,
+    "selected": 0,
+    "selected_names": [],
+    "min": 3,
+    "median": 5,
+    "max": 32,
+    "mean": 7.2,
+    "ge50": 0,
+    "ge70": 0,
+    "est_tokens_median_summary": 850.1,
+    "prompt_tokens_per_file": 700.0,
+    "completion_tokens_per_file": 192.6,
+    "total_tokens_per_file": 892.5,
+    "strings_used_mean": 20.0,
+    "summary_truncated": 0,
+    "cny": 0.4998,
+    "send_rate_to_deep": 0.0
+   }
+  },
+  "verification": {
+   "ok": 130,
+   "failed": 0,
+   "errors": [],
+   "from_cache": 0,
+   "usage_source": {
+    "provider": 130
+   },
+   "parse_modes": {
+    "strict_json": 130
+   },
+   "summary_truncated": 8,
+   "summary_over_budget": 0,
+   "pdf_facts_present": 0,
+   "usable": true
+  },
+  "wall_s": 102.5
+ },
+ "arm_new": {
+  "arm": "②层臂 · 新摘要（PDF 单独解析路径）",
+  "summary_module": "aiav.triage",
+  "triage_version": "2",
+  "model": "deepseek-v4.1-flash",
+  "threshold": 60,
+  "labels": {
+   "malicious": {
+    "files": 60,
+    "scored": 60,
+    "selected": 36,
+    "selected_names": [
+     "06328e27d906ef067bd0cbb6822ae4f9dd0d6e13f4e209c948ad0b0919b0b9c8.pdf",
+     "0e3317df95f6c236bdb7f7761b1b3c839100c89797f9ae52eedc9daed96f7bbb.pdf",
+     "205064af53c802ca95a0f902096c0e1f2684081b73c3f6e4005a1af9f778c6aa.pdf",
+     "250179b1e83c518c5ebbb55e6bfaf038eb69f1fb5c7358d57be4203d89d001a9.pdf",
+     "26151e6df5ac089a79eecf4032e375e51d50b319ed671c1dadec522a945c9264.pdf",
+     "2b708addd75ec3ca541895cd2c417fc216e84b42ca96f785a6d2deeb3e59af5f.pdf1",
+     "351e85e1d8c673cf0818705a986102ff76ef82ba0b11f8db2574b77ac1232552.pdf",
+     "36caf3ba9df00968517e783cc25747cb9e1b0c30124c1f6d75bf2341f98f4c7b.pdf",
+     "379b41e3fd94f48d3f1756202fc4e702a98af4f01ca59b1be30cb3e31bc4b3ce.pdf",
+     "3afef6872b721b25349bd9083f46b61461c022eab3f46354ac92dff4a2a6b881.pdf",
+     "47b589605189793bba57129495dfa7367f79f9d6b366372386bb83ec991936a3.pdf",
+     "4cc06421248086d6b39b9af81bf78875a1ddad4b61d8acb1cb80f041baf598e4.pdf",
+     "5095c6478dbb7f167c637511536ddc9bdc60828cc7c323041c68a2918eb351e8.pdf",
+     "54077a5b15638e354fa02318623775b7a1cc0e8c21e59bcbab333035369e377f.pdf",
+     "5a2c5ecfaa6a582055f07fc292f602c39c59d5ae6bacf711acacc60f7ed3d8a6.pdf",
+     "5f5aa2aaf7c38331ac90dd06e2bbf0a9603edfac51a98084d671f569cb218b99.pdf",
+     "6504e90f463974d97e7ebf401d4c1a557ed6c06bae143718d6f74b5f9ae50952.pdf",
+     "65dca34b04416f9a113f09718cbe51e11fd58e7287b7863e37f393ed4d25dde7.pdf",
+     "693ea9f0837c9e0c0413da6198b6316a6ca6dfd9f4d3db71664d2270a65bcf38.pdf",
+     "6f267fbd4ac2ec09001acf5f05bf771f2aec57a3b9fa446754dc88a9c13fb5d5.bin",
+     "6fb770924c7dea4b2392f523ba8969abdf17624f10911772eb54e338e71aaea6.pdf",
+     "8aae82dfe337761e498f8509c66b54f7ffb59896606869739f22f6b8a07ab64c.pdf",
+     "9645d1974020b793786685f8f96603060c5699a75615a4da471ac10fa9db882b.pdf",
+     "9b14d367c99b7d9187a58406ad3eb55e2dee12b4b2bc341f9058c622b7b87fa3.pdf",
+     "9f4e98d10a0951edaa4f4061b06cf3ff0ca87af4cd417fdb5a59e5dcad5ee0d0.pdf",
+     "a54d2448c10f63a4949e0f5ae4430cf60e2f13b543e2cf6bdd052a99f8fec461.vbs",
+     "b046d04b61f3ebfd9410c8b4f365118e29470fb6c54529c2425f553eb6364d8e.pdf",
+     "b56e4522e6cfea25a70594907997cb246a24bd1d9302450b42a21803cca1a07b.bin",
+     "b943774f76d17c86097b22aea84201788037eaeeef222c8a647fe98e795cf8af.pdf",
+     "d403943529699c8bfbcaa4bbafabd2b190419032cafac01a89783bae5e1da86e.pdf",
+     "d67e62bb3ebf9f27dfb8fbd20f88748bb898f5a70265b386a64cb92fafefe0d5.pdf",
+     "d75d839aee53a5afeaf7fdd8db7f8e2b828042c9ca058cd280f8a509e0776b46.pdf",
+     "e2b75baeb7ed21fb8f27984f941286770d1c3c0b60fce8d7fa5b167bd24ba6dc.pdf",
+     "ef85bfb534a2d679261902aab71e24dde3c5c9b7950e300dd0df298dfddddc02.pdf",
+     "f077cc7061c6c9f0c280ec6507a74b00887f1ebe1047d58ddd0160f7de4fc70c.pdf",
+     "fc31dfb6b521c5cce4a13c61fe86547d12bfeb75cc8466283dfccb74250734b0.pdf"
+    ],
+    "min": 8,
+    "median": 72,
+    "max": 96,
+    "mean": 59.3,
+    "ge50": 41,
+    "ge70": 32,
+    "est_tokens_median_summary": 868.7,
+    "prompt_tokens_per_file": 693.2,
+    "completion_tokens_per_file": 438.2,
+    "total_tokens_per_file": 1131.4,
+    "strings_used_mean": 7.7,
+    "summary_truncated": 5,
+    "cny": 0.5431,
+    "recall_at_threshold": 0.6,
+    "hits": 36
+   },
+   "clean": {
+    "files": 70,
+    "scored": 70,
+    "selected": 0,
+    "selected_names": [],
+    "min": 5,
+    "median": 8,
+    "max": 42,
+    "mean": 10.6,
+    "ge50": 0,
+    "ge70": 0,
+    "est_tokens_median_summary": 773.7,
+    "prompt_tokens_per_file": 605.6,
+    "completion_tokens_per_file": 349.2,
+    "total_tokens_per_file": 954.8,
+    "strings_used_mean": 8.0,
+    "summary_truncated": 0,
+    "cny": 0.5347,
+    "send_rate_to_deep": 0.0
+   }
+  },
+  "verification": {
+   "ok": 130,
+   "failed": 0,
+   "errors": [],
+   "from_cache": 0,
+   "usage_source": {
+    "provider": 130
+   },
+   "parse_modes": {
+    "strict_json": 130
+   },
+   "summary_truncated": 5,
+   "summary_over_budget": 0,
+   "pdf_facts_present": 130,
+   "usable": true
+  },
+  "wall_s": 137.9
+ },
+ "arm_diff": {
+  "malicious_files": 60,
+  "recovered": 24,
+  "recovered_detail": [
+   {
+    "name": "06328e27d906ef067bd0cbb6822ae4f9dd0d6e13f4e209c948ad0b0919b0b9c8.pdf",
+    "old_score": 5,
+    "new_score": 78,
+    "new_reason": "PDF 含两条 /URI 外链动作，均指向短链 https://surl.li/yerloi，其中一条用八进制转义（https\\072\\057\\057surl\\056li\\057yerloi）混淆，且 Producer 为 PyPDF2，符合可疑钓鱼/投放 PDF 特征。"
+   },
+   {
+    "name": "0e3317df95f6c236bdb7f7761b1b3c839100c89797f9ae52eedc9daed96f7bbb.pdf",
+    "old_score": 30,
+    "new_score": 78,
+    "new_reason": "PDF 含 /OpenAction 触发 /JavaScript，脚本仅用意大利语弹窗诱导用浏览器打开，并外链到伪装 booking.com 的 vercel 地址 invoice-1645080830.pdf，符合钓鱼重定向特征。"
+   },
+   {
+    "name": "205064af53c802ca95a0f902096c0e1f2684081b73c3f6e4005a1af9f778c6aa.pdf",
+    "old_score": 5,
+    "new_score": 68,
+    "new_reason": "PDF 含 /AcroForm 表单字段且唯一 /URI 动作指向文件分享 API https://pixeldrain.com/api/file/6Bpe2iwx，整体熵 7.833，符合借 PDF 外链投递载荷的可疑特征。"
+   },
+   {
+    "name": "250179b1e83c518c5ebbb55e6bfaf038eb69f1fb5c7358d57be4203d89d001a9.pdf",
+    "old_score": 8,
+    "new_score": 82,
+    "new_reason": "PDF 带 /OpenAction 触发 JS（app.alert(\"Reader not Supported!Please Open inside browser.\")）并含外链 https://bookinge.netlify.app/#invoice-1658768288.pdf，是典型的诱导跳转钓鱼发票页手法。"
+   },
+   {
+    "name": "2b708addd75ec3ca541895cd2c417fc216e84b42ca96f785a6d2deeb3e59af5f.pdf1",
+    "old_score": 12,
+    "new_score": 60,
+    "new_reason": "仅1995字节的单页PDF却含4个FlateDecode流且正文资源只有/XObject /XC1 7 0 R、无字体或文本对象，结构符合以嵌入式对象/脚本载荷为主的投放型PDF。"
+   },
+   {
+    "name": "351e85e1d8c673cf0818705a986102ff76ef82ba0b11f8db2574b77ac1232552.pdf",
+    "old_score": 8,
+    "new_score": 72,
+    "new_reason": "PDF 含 /OpenAction 与 /JS，打开即触发意大利语弹窗“请用浏览器打开”，并挂外链 bookingc.netlify.app/#invoice-1617964062.pdf，构成自动跳转引导的可疑钓鱼/重定向链。"
+   },
+   {
+    "name": "36caf3ba9df00968517e783cc25747cb9e1b0c30124c1f6d75bf2341f98f4c7b.pdf",
+    "old_score": 10,
+    "new_score": 85,
+    "new_reason": "PDF 内含 /URI 外链动作指向 https://storage.googleapis.com/ydhhs/Tax%20Payment%20Notice.zip，以“税务通知”名义引导下载可执行压缩包，属典型钓鱼投递链特征。"
+   },
+   {
+    "name": "379b41e3fd94f48d3f1756202fc4e702a98af4f01ca59b1be30cb3e31bc4b3ce.pdf",
+    "old_score": 58,
+    "new_score": 78,
+    "new_reason": "PDF 含 /OpenAction+/JavaScript 且脚本弹窗诱导在浏览器打开，并带两条指向 netlify.app 的 #invoice-*.pdf 外链，呈典型钓鱼跳转特征。"
+   },
+   {
+    "name": "3afef6872b721b25349bd9083f46b61461c022eab3f46354ac92dff4a2a6b881.pdf",
+    "old_score": 20,
+    "new_score": 78,
+    "new_reason": "PDF 标题为西班牙语成人诱饵“Jacqueline Salazar - Modelo de Lenceria”，且唯一外链 /URI 指向可疑 .pro 域名 https://ct.almacencancuns.pro/0SEN711，结合 HeadlessChrome 生成器信息，具有钓鱼/恶意跳转特征。"
+   },
+   {
+    "name": "4cc06421248086d6b39b9af81bf78875a1ddad4b61d8acb1cb80f041baf598e4.pdf",
+    "old_score": 8,
+    "new_score": 80,
+    "new_reason": "PDF 同时含 /OpenAction、/JavaScript、/Names/JavaScript 和 /Launch 动作，URI 指向仿冒域名 account.bo0king.co，且 JS 用“Lettore non compatibile! Per favore, aprilo nel browser.”诱导在浏览器打开。"
+   },
+   {
+    "name": "5a2c5ecfaa6a582055f07fc292f602c39c59d5ae6bacf711acacc60f7ed3d8a6.pdf",
+    "old_score": 15,
+    "new_score": 82,
+    "new_reason": "PDF 内嵌唯一外链 /URI 指向 securedoc.cracksdownloadworld.com 并携带 40 位十六进制跟踪串，且整体熵 7.995 接近随机、仅 13 个对象却含 5 个流，符合钓鱼/恶意诱饵文档特征。"
+   },
+   {
+    "name": "6f267fbd4ac2ec09001acf5f05bf771f2aec57a3b9fa446754dc88a9c13fb5d5.bin",
+    "old_score": 40,
+    "new_score": 62,
+    "new_reason": "标题为发票诱饵(Invoice with Discount and GST)、Creator 字段被写成 HeadlessChrome 的 User-Agent（自动化批量生成痕迹），且仅 1 页却含 11 个流、整体熵 7.703，与普通办公 PDF 特征不符。"
+   },
+   {
+    "name": "6fb770924c7dea4b2392f523ba8969abdf17624f10911772eb54e338e71aaea6.pdf",
+    "old_score": 5,
+    "new_score": 75,
+    "new_reason": "PDF 内含 /JS 且 URI 动作指向政府域名下的 CertificadoPE.exe 可执行文件，并伪装成“Ofício Polícia Civil”公文，存在诱导下载运行的可疑特征。"
+   },
+   {
+    "name": "8aae82dfe337761e498f8509c66b54f7ffb59896606869739f22f6b8a07ab64c.pdf",
+    "old_score": 10,
+    "new_score": 86,
+    "new_reason": "伪装成巴西民警公文的诱饵（Title 为 'OFÍCIO REQUISIÇÃO - PCSP'），却只含 1 页、整体熵高达 7.994，且唯一外链动作指向裸 IP 地址 https://104.249.10.197/index.php，构成典型钓鱼/投递链特征。"
+   },
+   {
+    "name": "9645d1974020b793786685f8f96603060c5699a75615a4da471ac10fa9db882b.pdf",
+    "old_score": 18,
+    "new_score": 88,
+    "new_reason": "PDF 内唯一外链动作 /URI 指向裸 IP 地址 http://147.124.222.89/host/Factura%20N%c2%ba%2025000168.7z，以“发票”名义诱导下载 7z 压缩包，属典型钓鱼投递链。"
+   },
+   {
+    "name": "9f4e98d10a0951edaa4f4061b06cf3ff0ca87af4cd417fdb5a59e5dcad5ee0d0.pdf",
+    "old_score": 42,
+    "new_score": 62,
+    "new_reason": "PDF 内 5 条 /URI 外链全部指向与文档无关的随机域名（3bnat.com、4o64flb.com、aphroditeporntube.com 等），整体熵 7.669 偏高且含 9 个流，符合垃圾/钓鱼类 PDF 特征。"
+   },
+   {
+    "name": "b56e4522e6cfea25a70594907997cb246a24bd1d9302450b42a21803cca1a07b.bin",
+    "old_score": 40,
+    "new_score": 82,
+    "new_reason": "PDF内含5条/URI动作，其中OAuth authorize链接携带client_id且redirect_uri指向link.photo.talk.zdn.vn/photolinkv2/720/后接base64编码到mobi.websitescare.com，具OAuth钓鱼/重定向链特征，另有多个mailto诱导地址，整体熵7.943且扩展名为.bin。"
+   },
+   {
+    "name": "b943774f76d17c86097b22aea84201788037eaeeef222c8a647fe98e795cf8af.pdf",
+    "old_score": 8,
+    "new_score": 88,
+    "new_reason": "PDF 内含 /URI 外链指向裸 IP HTTP 地址，文件名伪装为意大利语“RESOCONTO INSOLUTI ... ATTENZIONE IBAN.7z”，是典型钓鱼/恶意附件下载诱饵。"
+   },
+   {
+    "name": "d403943529699c8bfbcaa4bbafabd2b190419032cafac01a89783bae5e1da86e.pdf",
+    "old_score": 12,
+    "new_score": 70,
+    "new_reason": "单页 PDF 仅含 1 条 /URI 外链动作，指向伪装成云盘的陌生域名 https://loams.filecloudtrial.com/url/file，且正文无实质内容、文件名本身为哈希串，符合钓鱼跳转 PDF 特征。"
+   },
+   {
+    "name": "d67e62bb3ebf9f27dfb8fbd20f88748bb898f5a70265b386a64cb92fafefe0d5.pdf",
+    "old_score": 15,
+    "new_score": 76,
+    "new_reason": "PDF 含 1 条 /URI 动作，经 Shoutout.wix.com 跳转，Base64 负载解出 Comodo ITSM 的 enroll/token/wizard 远程管理工具注册令牌，符合 RMM 滥用投递链特征。"
+   },
+   {
+    "name": "d75d839aee53a5afeaf7fdd8db7f8e2b828042c9ca058cd280f8a509e0776b46.pdf",
+    "old_score": 30,
+    "new_score": 78,
+    "new_reason": "PDF 含 /OpenAction 触发 /JavaScript，JS 仅用 app.alert 诱导在浏览器打开，并带指向 accounts-bookings.vercel.app 的 /URI 且参数伪装 invoice.booking.com，符合钓鱼 PDF 特征。"
+   },
+   {
+    "name": "e2b75baeb7ed21fb8f27984f941286770d1c3c0b60fce8d7fa5b167bd24ba6dc.pdf",
+    "old_score": 50,
+    "new_score": 90,
+    "new_reason": "PDF 含 /URI 动作指向同一腾讯云 COS 桶的“2024年12月份税务抽查名单公示.7z”“2024.7z”“uninstall.exe”“2uninstall.exe”，并夹带 baidu.com 作掩护，呈典型钓鱼诱骗下载/投递特征。"
+   },
+   {
+    "name": "f077cc7061c6c9f0c280ec6507a74b00887f1ebe1047d58ddd0160f7de4fc70c.pdf",
+    "old_score": 8,
+    "new_score": 88,
+    "new_reason": "PDF 仅 1 页却含 /URI 外链动作指向裸 IP 下载 http://84.54.33.215:8080/Invoice.zip，是典型的发票诱饵投递链，且由 ReportLab 生成、无正常文档内容特征。"
+   },
+   {
+    "name": "fc31dfb6b521c5cce4a13c61fe86547d12bfeb75cc8466283dfccb74250734b0.pdf",
+    "old_score": 28,
+    "new_score": 72,
+    "new_reason": "PDF 动作仅含一个 /URI 外链，指向 4sync.com 的 directDownload 路径，并带 /AcroForm 交互表单，呈现诱导点击下载的投递特征。"
+   }
+  ],
+  "lost": 0,
+  "lost_detail": [],
+  "delta_median": 20,
+  "delta_mean": 25.4,
+  "delta_min": -24,
+  "delta_max": 80
+ },
+ "layer_pair": {
+  "deep_ai_files": 60,
+  "deep_ai_flagged_raw": 47,
+  "deep_ai_ceiling_raw": 0.7833,
+  "deep_ai_flagged": 48,
+  "deep_ai_ceiling": 0.8,
+  "deep_ai_risk": {
+   "suspicious": 23,
+   "malicious": 24,
+   "clean": 13
+  },
+  "deep_ai_degraded_files": [
+   "20c938b4c690d1ec441a7ef56686bbdca2e4e0d7a6c6f0eff22e516d65109bb8.pdf"
+  ],
+  "deep_ai_degraded_note": "③层全送臂有 1 个文件被 provider 网关的 content filter 拦下（`finish_reason=content_filter`，模型零输出 → 降级到规则判定）。按铁律「降级不为 0 的批次要作废」，所以这里：① 把它列为降级文件；② 单独重试 3 次，2 次拿到真实 AI 判定（都是 `suspicious`），修正值用 `deep_ai_ceiling`（`deep_ai_ceiling_raw` 是未修正的实测值）。**这个失败类是 provider 侧的，不是我们代码的 bug** —— 值得单独记一笔。",
+  "deep_ai_retry_fix": {
+   "file": "20c938b4c690d1ec441a7ef56686bbdca2e4e0d7a6c6f0eff22e516d65109bb8.pdf",
+   "risk_on_retry": "suspicious",
+   "attempts": 3,
+   "succeeded": 2,
+   "per_attempt": [
+    {
+     "report": "scan_20260928_184231.json",
+     "file": "20c938b4c690d1ec441a7ef56686bbdca2e4e0d7a6c6f0eff22e516d65109bb8.pdf",
+     "agent_used": true,
+     "risk": "suspicious",
+     "outcome": "ok"
+    },
+    {
+     "report": "scan_20260928_184257.json",
+     "file": "20c938b4c690d1ec441a7ef56686bbdca2e4e0d7a6c6f0eff22e516d65109bb8.pdf",
+     "agent_used": false,
+     "risk": "clean",
+     "outcome": "degraded_to_rules"
+    },
+    {
+     "report": "scan_20260928_184323.json",
+     "file": "20c938b4c690d1ec441a7ef56686bbdca2e4e0d7a6c6f0eff22e516d65109bb8.pdf",
+     "agent_used": true,
+     "risk": "suspicious",
+     "outcome": "ok"
+    }
+   ]
+  },
+  "layer_pair_recall_old": 0.2,
+  "layer_pair_recall_new": 0.6,
+  "note": "**层对口径（②+③）**：假设②层看得到**每一个** PDF（本轮实测时把入口闸这一条按住），选中就送③。生产里②只看得见入口闸 125 以上的文件 —— 所以这三个数**不是生产召回**，是「②层看懂之后，③能把它抬到哪」的上限。",
+  "deep_ai_tokens_per_file": 7316.0
+ },
+ "full_chain": {
+  "config": {
+   "ai_threshold": 200,
+   "ai_threshold_low": 0,
+   "deep_evidence_threshold": 300,
+   "triage_threshold": 60,
+   "triage_entry_gate": 125
+  },
+  "triage_layer": {
+   "candidates": 3,
+   "ran": 3,
+   "ok": 3,
+   "failed": 0,
+   "from_cache": 0,
+   "selected": 2,
+   "entry_gate": 125,
+   "threshold": 60,
+   "gate": 200,
+   "skipped": {
+    "①层已结案": 3,
+    "不在初筛入口档": 112,
+    "规则直送（≥闸门）": 12
+   },
+   "model": "deepseek-v4.1-flash"
+  },
+  "malicious": {
+   "files": 60,
+   "closed_malicious": 3,
+   "sent_to_ai": 14,
+   "sent_rate": 0.2333,
+   "ai_flagged": 17,
+   "ai_risk": {
+    "clean": 43,
+    "malicious": 11,
+    "suspicious": 6
+   },
+   "recall": 0.2833,
+   "recall_hits": 17,
+   "triage_ran": 3,
+   "triage_selected": 2,
+   "tokens": 94929,
+   "degraded": 0,
+   "errors": 0
+  },
+  "benign": {
+   "files": 70,
+   "closed_malicious": 0,
+   "sent_to_ai": 0,
+   "sent_rate": 0.0,
+   "ai_flagged": 0,
+   "ai_risk": {
+    "clean": 70
+   },
+   "recall": 0.0,
+   "recall_hits": 0,
+   "triage_ran": 0,
+   "triage_selected": 0,
+   "tokens": 0,
+   "degraded": 0,
+   "errors": 0
+  },
+  "benign_false_positive_rate": 0.0
+ },
+ "routing_reconciliation": {
+  "batch_a_mb280_scriptdoc_pdf": {
+   "files": 60,
+   "layer1_closed_malicious": 3,
+   "gate_direct_ge200": 12,
+   "triage_candidates_125_199": 3,
+   "silent_pass_lt125": 42,
+   "sent_to_ai": 14,
+   "recall": 0.2833
+  },
+  "pdf_fix_full_chain_arm": {
+   "files": 60,
+   "layer1_closed_malicious": 3,
+   "gate_direct_ge200": 12,
+   "triage_candidates_125_199": 3,
+   "silent_pass_lt125": 42,
+   "sent_to_ai": 14,
+   "recall": 0.2833
+  },
+  "reconciles": true,
+  "note": "**这两列必须逐格相等**：①层是确定性的，本轮没动它一个字。相等 = 这一轮生产口径的对照成立（唯一变量是②层摘要）。"
+ },
+ "regression": {
+  "per_type": {
+   "vbs": {
+    "n": 8,
+    "identical": 8,
+    "differ": 0,
+    "kind_detected": [
+     "script"
+    ],
+    "diff_samples": []
+   },
+   "js": {
+    "n": 8,
+    "identical": 8,
+    "differ": 0,
+    "kind_detected": [
+     "script"
+    ],
+    "diff_samples": []
+   },
+   "bat": {
+    "n": 8,
+    "identical": 8,
+    "differ": 0,
+    "kind_detected": [
+     "script"
+    ],
+    "diff_samples": []
+   },
+   "rtf": {
+    "n": 8,
+    "identical": 8,
+    "differ": 0,
+    "kind_detected": [
+     "other"
+    ],
+    "diff_samples": []
+   },
+   "xls": {
+    "n": 8,
+    "identical": 8,
+    "differ": 0,
+    "kind_detected": [
+     "ole"
+    ],
+    "diff_samples": []
+   },
+   "ps1": {
+    "n": 8,
+    "identical": 8,
+    "differ": 0,
+    "kind_detected": [
+     "other",
+     "script"
+    ],
+    "diff_samples": []
+   },
+   "wsf": {
+    "n": 8,
+    "identical": 8,
+    "differ": 0,
+    "kind_detected": [
+     "script"
+    ],
+    "diff_samples": []
+   },
+   "hta": {
+    "n": 8,
+    "identical": 8,
+    "differ": 0,
+    "kind_detected": [
+     "script"
+    ],
+    "diff_samples": []
+   },
+   "docm": {
+    "n": 8,
+    "identical": 8,
+    "differ": 0,
+    "kind_detected": [
+     "ole"
+    ],
+    "diff_samples": []
+   },
+   "pe": {
+    "n": 8,
+    "identical": 8,
+    "differ": 0,
+    "kind_detected": [
+     "pe"
+    ],
+    "diff_samples": []
+   }
+  },
+  "checked": 80,
+  "differ": 0,
+  "errors": []
+ },
+ "cost_summary": {
+  "triage_old_cny_all_files": 1.0369,
+  "triage_new_cny_all_files": 1.0778,
+  "triage_token_delta_per_file": 12.5,
+  "triage_prompt_token_delta_per_file": -13.7,
+  "price_note": "¥/百万 token 取项目常量 budget.CNY_PER_MILLION_TOKENS = 8.0（偏高的一档 = 上界）。"
+ },
+ "examples": [
+  {
+   "name": "06328e27d906ef067bd0cbb6822ae4f9dd0d6e13f4e209c948ad0b0919b0b9c8.pdf",
+   "old_score": 5,
+   "new_score": 78,
+   "new_reason": "PDF 含两条 /URI 外链动作，均指向短链 https://surl.li/yerloi，其中一条用八进制转义（https\\072\\057\\057surl\\056li\\057yerloi）混淆，且 Producer 为 PyPDF2，符合可疑钓鱼/投放 PDF 特征。"
+  },
+  {
+   "name": "0e3317df95f6c236bdb7f7761b1b3c839100c89797f9ae52eedc9daed96f7bbb.pdf",
+   "old_score": 30,
+   "new_score": 78,
+   "new_reason": "PDF 含 /OpenAction 触发 /JavaScript，脚本仅用意大利语弹窗诱导用浏览器打开，并外链到伪装 booking.com 的 vercel 地址 invoice-1645080830.pdf，符合钓鱼重定向特征。"
+  },
+  {
+   "name": "205064af53c802ca95a0f902096c0e1f2684081b73c3f6e4005a1af9f778c6aa.pdf",
+   "old_score": 5,
+   "new_score": 68,
+   "new_reason": "PDF 含 /AcroForm 表单字段且唯一 /URI 动作指向文件分享 API https://pixeldrain.com/api/file/6Bpe2iwx，整体熵 7.833，符合借 PDF 外链投递载荷的可疑特征。"
+  }
+ ]
+}
