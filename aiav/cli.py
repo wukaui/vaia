@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from rich.table import Table
 
 from aiav.agent import build_agent
 from aiav.budget import budget_from_env
+from aiav.criteria import AI_GATE, AI_GATE_LOW, TRIAGE_ENTRY_GATE, TRIAGE_GATE
 from aiav.capa_data import capa_ready_or_note
 from aiav.disposition import QUARANTINE_RISKS, StateStore, default_store
 from aiav.models import RiskLevel
@@ -50,6 +52,14 @@ def _store(state_dir: Path | None) -> StateStore:
     return StateStore(state_dir) if state_dir else default_store()
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    """读一个布尔环境变量（`1/true/yes/on` 为真）。与 `preload_enabled` 同款口径。"""
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 @app.callback()
 def main() -> None:
     """轻量级 AI 恶意文件扫描 Agent。"""
@@ -65,19 +75,45 @@ def scan(
     max_size_mb: int = typer.Option(50, "--max-size-mb", help="跳过超过该大小的文件"),
     include_system: bool = typer.Option(False, "--include-system", help="不跳过 Windows/Program Files 等目录"),
     ai_threshold: int = typer.Option(
-        300,
+        AI_GATE,
         "--ai-threshold",
         help="①层判据分数达到多少才把文件交给 AI（Assemblyline 刻度）。"
              "默认 300 = 上游 verdict.suspicious = 老口径的 12（两条弱信号才过线）。"
              "调到 0 会退回旧行为：每个文件都送审。",
+    ),
+    ai_threshold_low: int = typer.Option(
+        AI_GATE_LOW,
+        "--ai-threshold-low",
+        help="**低档送审**闸门（两档送审，2026-09-27）：分数落在 [低档, 高档) 的文件"
+             "**也送 AI**，报告里记成「低档」。默认 225 —— 它在 Dike 400 上是"
+             "「多抓 9 个恶意 / 只多送 7 个良性」的拐点（300→125 会多送 144 个良性，别去）。"
+             "低档与高档走同一条送审路径，只差报告字段 ai_tier。"
+             "0 = 关掉低档（退回只有高档的单档行为）。",
     ),
     deep_evidence_threshold: int = typer.Option(
         0, "--deep-evidence-threshold",
         help="分流·取证层：预筛分数低于它的文件只采轻量证据（PE 头/导入表/明文字符串/签名），"
              "不跑 capa/floss。0=不分流（全部深挖）。单位是 Assemblyline 刻度，"
              "300 = 老口径的 12"),
+    triage: bool = typer.Option(
+        False, "--triage/--no-triage",
+        help="②层 **LLM 初筛**（2026-09-27 接进流水线）：未结案、且预筛分落在"
+             "[初筛入口, 深度 AI 闸门) 的文件，先喂**最小摘要**给便宜档模型拿 0~100 分；"
+             "达到门槛的才进 ③ 深度 AI。默认关 —— 这一层要真花钱，必须显式打开"
+             "（也可以用 AI_AV_TRIAGE=1）。"),
+    triage_threshold: int = typer.Option(
+        TRIAGE_GATE, "--triage-threshold",
+        help="初筛门槛：初筛分达到它才送 ③ 深度 AI。默认 60 —— Dike 400 灰区上**算出来**的"
+             "（约束「良性送审 ≤10%」下召回最高，见报告 11.5）。换语料要重算。"),
+    triage_entry_gate: int = typer.Option(
+        TRIAGE_ENTRY_GATE, "--triage-entry-gate",
+        help="初筛入口：预筛分 ≥ 它（且未结案）才进初筛。默认 125 = 判据刻度弱信号档下界"
+             "（单条 HIGH_RISK_EXTENSION）。≥ 深度 AI 闸门的分由规则直送、不过初筛。"),
     model: str | None = typer.Option(None, "--model", help="覆盖 AGENT_MODEL"),
     base_url: str | None = typer.Option(None, "--base-url", help="覆盖 AGENT_BASE_URL"),
+    triage_model: str | None = typer.Option(
+        None, "--triage-model",
+        help="初筛那一层的模型（**应该是便宜档**）；不传用 AGENT_MODEL"),
     workers: int = typer.Option(4, "--workers", "-w", help="AI Agent 并发数"),
     quarantine: str = typer.Option(
         "off", "--quarantine", help="处置闭环：off / malicious / suspicious（要把哪些判定的文件移入隔离区）"),
@@ -121,6 +157,36 @@ def scan(
         files = list(iter_files(path, max_size_mb=max_size_mb, include_system=include_system,
                                 skip_stats=skip_stats))
     console.print(f"共发现 {len(files)} 个文件，开始扫描...")
+    # 两档送审（2026-09-27）：这一轮真正用的两个闸门**打印出来**。
+    # 报告抬头与逐文件行里也有，但日志里最先被看的就是这一行 ——
+    # "产物看不出这一档用的什么配置"是这个项目反复踩的坑（见 10.7 第一条 ⚠️）。
+    if 0 < ai_threshold_low < ai_threshold:
+        console.print(f"[cyan]送审闸门：高档 ≥{ai_threshold} · "
+                      f"低档 {ai_threshold_low}~{ai_threshold - 1}（也送 AI）· "
+                      f"<{ai_threshold_low} 静默放行[/cyan]")
+    else:
+        console.print(f"[cyan]送审闸门：单档 ≥{ai_threshold}（低档已关闭）[/cyan]")
+
+    # ---- ②层 LLM 初筛（2026-09-27）----
+    # 配置来源优先级：显式 `--triage` > 环境变量 `AI_AV_TRIAGE`。默认关。
+    # 为什么默认关：这一层要真花钱，而且"打开它"本身就是一次实验设计决定 ——
+    # 静默开启会让所有既有复现命令的成本变样。
+    triage_on = bool(triage) or _env_flag("AI_AV_TRIAGE", False)
+    triage_client = None
+    if triage_on and agent is not None:
+        try:
+            from aiav.triage import TriageClient
+
+            triage_client = TriageClient(model=triage_model, base_url=base_url)
+            console.print(
+                f"[cyan]②层 LLM 初筛已启用：{triage_client.model} · "
+                f"入口 ≥{triage_entry_gate}（未结案）· 门槛 {triage_threshold} · "
+                f"≥{ai_threshold} 由规则直送、不过初筛[/cyan]")
+        except Exception as exc:  # noqa: BLE001 - 初筛起不来不该让整轮扫描跑不起来
+            console.print(f"[yellow]②层 LLM 初筛未启用（{type(exc).__name__}: {exc}）[/yellow]")
+    elif triage_on:
+        console.print("[yellow]②层 LLM 初筛已请求，但没有可用的深度 AI Agent —— 跳过[/yellow]")
+
     if skip_stats:
         skipped = sum(skip_stats.values())
         detail = "、".join(f"{k} {v}" for k, v in sorted(skip_stats.items()))
@@ -191,6 +257,11 @@ def scan(
                 deterministic=not no_deterministic,
                 deep_evidence_threshold=deep_evidence_threshold,
                 clamav_batch=clamav_batch,
+                ai_threshold_low=ai_threshold_low,
+                triage_enabled=triage_client is not None,
+                triage_threshold=triage_threshold,
+                triage_entry_gate=triage_entry_gate,
+                triage_client=triage_client,
             )
             progress.advance(task, len(files))
             for file_path, report in zip(files, reports):
@@ -205,7 +276,12 @@ def scan(
                                    agent_samples=samples or None, budget=budget, store=store,
                                    deterministic=not no_deterministic,
                                    deep_evidence_threshold=deep_evidence_threshold,
-                                   clamav_batch=clamav_batch)
+                                   clamav_batch=clamav_batch,
+                                   ai_threshold_low=ai_threshold_low,
+                                   triage_enabled=triage_client is not None,
+                                   triage_threshold=triage_threshold,
+                                   triage_entry_gate=triage_entry_gate,
+                                   triage_client=triage_client)
                 reports.append(report)
                 progress.advance(task)
 
@@ -218,6 +294,20 @@ def scan(
     extra: dict = {}
     if budget is not None:
         extra["token_budget"] = budget.as_dict()
+    if triage_client is not None:
+        # ②层的批次账（候选/跑了/失败/吃缓存/选中）—— 从第一个报告上取回，
+        # `scan_files_concurrent` 把同一份统计挂在每个报告上。
+        batch_stats = next((r.deterministic.get("triage_batch") for r in reports
+                            if r.deterministic.get("triage_batch")), None)
+        if batch_stats:
+            extra["triage"] = batch_stats
+            console.print(
+                f"[cyan]②层初筛：候选 {batch_stats['candidates']} · 跑了 {batch_stats['ran']}"
+                f"（缓存 {batch_stats['from_cache']} / 失败 {batch_stats['failed']}）· "
+                f"选中送 ③ {batch_stats['selected']}[/cyan]")
+            if batch_stats["failed"]:
+                console.print(f"[red]⚠️ 初筛失败 {batch_stats['failed']} 个"
+                              f"（按核验铁律要单独看：失败不许当成『没过门槛』）[/red]")
     if skip_stats:
         # 口径可查：报告里能看出"总数"之外还有多少东西被跳过了、为什么
         extra["scan_skips"] = {
@@ -407,6 +497,90 @@ def whitelist_remove(
     """从白名单移除。"""
     res = _store(state_dir).whitelist_remove(sha256)
     console.print(f"[green]移除 {res['removed']} 条[/green]" if res["removed"] else "[yellow]没找到该 sha256[/yellow]")
+
+
+@app.command("triage")
+def triage_cmd(
+    path: Path = typer.Argument(..., exists=True, file_okay=True, dir_okay=True, readable=True,
+                                help="要初筛的文件或目录"),
+    model: str | None = typer.Option(None, "--model", help="覆盖 AGENT_MODEL（**应该用便宜档**）"),
+    base_url: str | None = typer.Option(None, "--base-url"),
+    threshold: int = typer.Option(
+        60, "--threshold",
+        help="可疑度分达到多少算「该送深度 AI」。默认 60 是 Dike 400 灰区上**算出来**的"
+             "（约束：良性送审率 ≤10%，此时召回 0.733）—— 换语料要重算，别照搬。"),
+    workers: int = typer.Option(6, "--workers", "-w"),
+    max_prompt_tokens: int = typer.Option(1000, "--max-prompt-tokens",
+                                          help="单文件摘要的 token 预算（成本闸）"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="关掉 sha256 缓存"),
+    cache_dir: Path | None = typer.Option(None, "--cache-dir"),
+    show_all: bool = typer.Option(False, "--show-all", help="列出全部文件（默认只列达到门槛的）"),
+) -> None:
+    """LLM 初筛：只喂**最小摘要**（≤1000 token/文件）拿一个 0~100 的可疑度分。
+
+    这一层**独立于深度 AI**，也不改任何判据/闸门：它只回答"哪些文件值得花钱深挖"。
+    只读静态分析：不执行样本、不上传、不落地。
+    """
+    from aiav.cache import TriageCache, default_triage_cache_dir, cache_enabled
+    from aiav.scanner import iter_files
+    from aiav.triage import TriageClient, run_batch, summarize_cost
+
+    files = ([path] if path.is_file()
+             else list(iter_files(path, max_size_mb=200, include_system=True)))
+    if not files:
+        console.print("[yellow]没有可初筛的文件[/yellow]")
+        return
+    try:
+        client = TriageClient(model=model, base_url=base_url)
+    except RuntimeError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    cache = None if (no_cache or not cache_enabled()) else TriageCache(
+        root=cache_dir or default_triage_cache_dir())
+    console.print(f"[green]LLM 初筛：{client.model}[/green] · {len(files)} 个文件 · "
+                  f"摘要预算 {max_prompt_tokens} token/文件 · "
+                  f"门槛 {threshold} · 缓存 {'关' if cache is None else cache.root}")
+
+    items = [(f, compute_sha256(f)) for f in files]
+    with Progress(SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+                  BarColumn(), TextColumn("{task.completed}/{task.total}"),
+                  TimeElapsedColumn(), console=console) as progress:
+        task = progress.add_task("初筛中", total=len(items))
+
+        def tick(_record: dict) -> None:
+            progress.advance(task)
+
+        results = run_batch(items, client, workers=workers,
+                            max_prompt_tokens=max_prompt_tokens, cache=cache,
+                            on_result=tick)
+
+    cost = summarize_cost(results)
+    hits = [r for r in results if (r.get("score") or -1) >= threshold]
+    table = Table(title=f"LLM 初筛结果（门槛 {threshold}；列出 {len(hits)}/{len(results)}）")
+    for col in ("可疑度", "判定", "大小", "类型", "理由", "文件"):
+        table.add_column(col, overflow="fold")
+    for r in sorted(results, key=lambda x: -(x.get("score") or -1)):
+        if not show_all and (r.get("score") or -1) < threshold:
+            continue
+        score = r.get("score")
+        mark = "[red]送深度AI[/red]" if score is not None and score >= threshold else "[green]不送[/green]"
+        table.add_row(str(score) if score is not None else "[red]失败[/red]", mark,
+                      f"{(r.get('summary') or {}).get('size', 0) // 1024}KB",
+                      str((r.get("summary") or {}).get("kind", "?")),
+                      (r.get("reason") or r.get("error") or "")[:160], r["path"])
+    console.print(table)
+
+    console.print(f"[cyan]成本：{cost['total_tokens']:,} token（均 {cost['avg_tokens_per_file']} /文件）"
+                  f" · ¥{cost['cost_cny']} · 单价口径 "
+                  f"¥{cost['cny_per_million_tokens']}/百万[/cyan]")
+    # 核验铁律：error / 降级计数不为 0 的批次不能用
+    flag = "[red]⚠️ 有失败条目，这批不可用[/red]" if cost["failed"] else "[green]0 失败[/green]"
+    console.print(f"[cyan]核验：成功 {cost['ok']} / 失败 {cost['failed']} / 缓存命中 "
+                  f"{cost['from_cache']} / usage {cost['usage_source']} / "
+                  f"解析档 {cost['parse_modes']}[/cyan] {flag}")
+    if cost.get("summary_over_budget"):
+        console.print(f"[yellow]⚠️ {cost['summary_over_budget']} 个文件摘要超出预算上限[/yellow]")
 
 
 @app.command("history")

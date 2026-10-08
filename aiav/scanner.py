@@ -15,12 +15,20 @@ from aiav.budget import TokenBudget
 from aiav.cache import ScanCache, cache_enabled, report_from_cache
 from aiav.criteria import (
     AI_GATE,
+    AI_GATE_LOW,
     CRITERIA,
+    TRIAGE_ENTRY_GATE,
+    TRIAGE_GATE,
     CriterionHit,
+    ai_tier,
     band_label,
     classify_reason,
     decide as decide_deterministic,
+    effective_low_gate,
+    effective_triage_entry_gate,
     file_score,
+    is_triage_candidate,
+    triage_tier,
     update_stats as update_criteria_stats,
 )
 from aiav.disposition import StateStore, default_store
@@ -234,7 +242,9 @@ def iter_files(
 
 
 def quick_prefilter(path: Path, sha256: str, with_signature: bool = False,
-                    clamav_batch: Mapping[str, Any] | None = None) -> PreliminaryEvidence:
+                    clamav_batch: Mapping[str, Any] | None = None,
+                    ai_threshold: int | None = None,
+                    ai_threshold_low: int | None = None) -> PreliminaryEvidence:
     """规则预筛，不调用 LLM。
 
     with_signature=True 时附带确定性签名证据块（要调 Windows 验签，约 0.5s/文件），
@@ -242,6 +252,20 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False,
 
     `clamav_batch` 是 `tools.clamav_scan_batch()` 的返回值（**整批一次进程**的 ClamAV 结果）。
     传了就用它查表，不传才走单文件兜底 —— 单文件一次要重新加载 362 万条签名（6.3 s）。
+
+    `ai_threshold` = 本次跑的**运行时闸门**（`--ai-threshold`）。不传就退回默认的
+    `AI_GATE`。⚠️ 2026-09-27 阈值扫描扫出来的坑：这里原来写死 `AI_GATE`，于是
+    `--ai-threshold 100` 跑出来的报告里，逐文件 `deterministic.disposition` 还是按
+    300 算的 —— 105 个真送了 AI 的文件里有 104 个被标成 `pass`（"未结案"），
+    报告抬头也写着"闸门 300"，**产物自己看不出这一档到底送了多少审**。
+    路由本来就走 `scan_file` 里的 `prefilter_score >= ai_threshold`，这里只是让
+    **报告字段**跟路由说同一件事。
+
+    `ai_threshold_low` = **低档送审**闸门（2026-09-27 两档送审，默认 `AI_GATE_LOW`=225）：
+    分数落在 `[低档, 高档)` 的文件也送 AI。报告字段里因此多两项 ——
+    `gate_low`（这一轮真正的低档线）与 `ai_tier`（`high` / `low` / `none`）。
+    ⚠️ 这里跟 `ai_threshold` 是**同一个坑**：字段必须跟运行时闸门走，
+    否则"两档"在产物里看不出区别（低档送审的文件会被读成 `pass` 未结案）。
     """
     ext = path.suffix.lower()
     name_lower = path.name.lower()
@@ -523,7 +547,9 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False,
     # 分数由判据表算出来（每条夹自己的 max_score），不再由散落的字面量累加。
     # 判干净方向的结案判据命中时**归零**（上游 safelist 语义），所以分数与结论同源。
     score, scored, clean_ids = file_score(hits)
-    verdict_now = decide_deterministic(hits)
+    gate_used = AI_GATE if ai_threshold is None else int(ai_threshold)
+    gate_low_used = AI_GATE_LOW if ai_threshold_low is None else int(ai_threshold_low)
+    verdict_now = decide_deterministic(hits, gate=gate_used, gate_low=gate_low_used)
 
     return PreliminaryEvidence(
         path=str(path),
@@ -553,7 +579,15 @@ def quick_prefilter(path: Path, sha256: str, with_signature: bool = False,
             "score": verdict_now.score,
             "sends_to_ai": verdict_now.sends_to_ai,
             "reasons": verdict_now.reasons,
-            "gate": AI_GATE,
+            "gate": gate_used,
+            # 两档送审（2026-09-27）：低档线 + 这个分数落在哪一档（high / low / none）。
+            # 报告抬头与逐文件行都读这两项来区分"高档送审 / 低档送审 / 未送"。
+            "gate_low": effective_low_gate(gate_used, gate_low_used),
+            # ⚠️ 只有**真的进了送审路由**的文件才有档位：确定性结案（≥1000 判恶意 /
+            # 判干净）的文件根本没走到路由，它们的分数可能 ≥1000（按分数算会记成 high），
+            # 那是假的 —— 所以这里以 `sends_to_ai` 为准，没送就是 none。
+            "ai_tier": (ai_tier(score, gate=gate_used, gate_low=gate_low_used)
+                        if verdict_now.sends_to_ai else "none"),
         },
     )
 
@@ -1242,6 +1276,121 @@ def _collect_preload(path: Path, sha256: str, evidence: PreliminaryEvidence,
                            deep=deep, score=evidence.prefilter_score, threshold=threshold)
 
 
+def run_triage_one(
+    path: Path,
+    sha256: str,
+    client: Any,
+    *,
+    max_prompt_tokens: int | None = None,
+    cache: Any | None = None,
+) -> tuple[dict[str, Any] | None, str]:
+    """②层单文件初筛：返回 `(记录, 来源)`。
+
+    `client` 是 `aiav.triage.TriageClient`（`Any` 是为了**不把 httpx 拖进扫描器**：
+    没打开初筛的路径一行都不 import 这一层）。来源 = `run`（真跑）/ `cache`（吃缓存）。
+    失败**不抛异常** —— 初筛是"挑值得看的"，它坏了不该让整轮扫描跑不起来；
+    失败原样返回（`score=None` + `error`），由 `scan_file` 记成"没跑成"而不是"没过门槛"。
+    """
+    from aiav.triage import TARGET_PROMPT_TOKENS, triage_cached
+
+    try:
+        record = triage_cached(
+            path, sha256, client,
+            max_prompt_tokens=(TARGET_PROMPT_TOKENS if max_prompt_tokens is None
+                               else int(max_prompt_tokens)),
+            cache=cache)
+    except Exception as exc:  # noqa: BLE001 - 初筛故障不该让扫描整轮失败
+        return ({"score": None, "reason": "", "ok": False,
+                 "error": f"{type(exc).__name__}: {exc}", "from_cache": False}, "run")
+    return record, ("cache" if record.get("from_cache") else "run")
+
+
+def collect_triage_scores(
+    files: Sequence[Path],
+    *,
+    client: Any,
+    threshold: int = TRIAGE_GATE,
+    entry_gate: int = TRIAGE_ENTRY_GATE,
+    gate: int = AI_GATE,
+    cache: Any | None = None,
+    workers: int = 4,
+    clamav_batch: Mapping[str, Any] | None = None,
+    ai_threshold_low: int = AI_GATE_LOW,
+    max_prompt_tokens: int | None = None,
+    on_result: Callable[[dict[str, Any]], None] | None = None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """②层**批量**初筛：先挑候选（本地规则，0 token），再并发跑模型。
+
+    为什么要单独一个"挑候选"的预扫：初筛入口问的是"未结案 + 分数在入口~闸门之间"，
+    而"结案与否"要跑完 `quick_prefilter` 才知道。预扫只做本地静态读取（不算分、
+    不调模型），命中的才花钱 —— **不能把 400 个文件全喂给便宜档模型**。
+
+    返回 `(sha256 → 初筛记录, 统计块)`。统计块进报告，回答"这一层到底跑了几个、
+    选中几个、失败几个、吃了几次缓存"。
+    """
+    from aiav.triage import TARGET_PROMPT_TOKENS, run_batch
+
+    items: list[tuple[Path, str]] = []
+    skipped: dict[str, int] = {}
+    for path in files:
+        try:
+            sha256 = compute_sha256(path)
+        except OSError:
+            skipped["读不了（不算候选）"] = skipped.get("读不了（不算候选）", 0) + 1
+            continue
+        # ⚠️ **必须跟 `scan_file` 用同一档签名证据**（`_signature_check_enabled(True)`）：
+        # 少了它，`DET_TRUSTED_SIGNATURE` 不命中，51 个"签名可信 → 判干净结案"的良性
+        # 文件在这里会显示成 125 分、未结案，于是**被当成灰区候选送去花钱初筛**；
+        # 而 `scan_file` 那边它们早就结案了、根本不会跑初筛。
+        # 实测（2026-09-27 第一遍 r1）：批次报了 191 个候选，产物里只有 143 个真跑过 ——
+        # 多花的 48 次调用全是这个口径差造成的（而 r1 的墙钟与钱都按 191 算了）。
+        # 教训与"闸门进缓存键"同一类：**两处口径不一致，产物里看不出来**。
+        evidence = quick_prefilter(path, sha256, with_signature=_signature_check_enabled(True),
+                                   clamav_batch=clamav_batch,
+                                   ai_threshold=gate, ai_threshold_low=ai_threshold_low)
+        det = evidence.deterministic or {}
+        if det.get("sends_to_ai"):
+            # ≥闸门（含低档）：规则已经说"值得看"，直送 ③ —— 初筛不参与
+            skipped["规则直送（≥闸门）"] = skipped.get("规则直送（≥闸门）", 0) + 1
+            continue
+        if det.get("disposition") in ("closed_malicious", "closed_clean"):
+            skipped["①层已结案"] = skipped.get("①层已结案", 0) + 1
+            continue
+        if not is_triage_candidate(evidence.prefilter_score, gate=gate, entry_gate=entry_gate):
+            skipped["不在初筛入口档"] = skipped.get("不在初筛入口档", 0) + 1
+            continue
+        # 批次这一遍自己的判断**记在记录里**，好让 `scan_file` 那边能发现两边口径不一致。
+        # 为什么要留这个：2026-09-27 第一遍 r1 踩过 —— 批次按"没结案"选了 191 个候选，
+        # 而 `scan_file` 按"签名可信 → 已结案"只跑了 143 个，产物里**一点异常都看不出来**
+        # （批次说 191、逐文件说 143，两个数并排放在同一份报告里也不刺眼）。
+        # 现在两边对不上会被显式记成 `candidate_mismatch`。
+        items.append((path, sha256))
+
+    records = run_batch(
+        items, client, workers=workers,
+        max_prompt_tokens=(TARGET_PROMPT_TOKENS if max_prompt_tokens is None
+                           else int(max_prompt_tokens)),
+        cache=cache, on_result=on_result)
+    scores = {r["sha256"]: r for r in records}
+    ok = [r for r in records if r.get("ok")]
+    selected = [r for r in ok if (r.get("score") is not None
+                                  and int(r["score"]) >= int(threshold))]
+    stats = {
+        "candidates": len(items),
+        "ran": len(records),
+        "ok": len(ok),
+        "failed": len(records) - len(ok),
+        "from_cache": sum(1 for r in records if r.get("from_cache")),
+        "selected": len(selected),
+        "entry_gate": effective_triage_entry_gate(entry_gate, gate),
+        "threshold": int(threshold),
+        "gate": int(gate),
+        "skipped": dict(sorted(skipped.items())),
+        "model": getattr(client, "model", ""),
+    }
+    return scores, stats
+
+
 def merge_retry_infos(infos: list[dict]) -> dict:
     """把多次采样各自的模型调用留痕合并成一条报告字段。
 
@@ -1391,6 +1540,14 @@ def scan_file(
     deterministic: bool = True,
     deep_evidence_threshold: int | None = None,
     clamav_batch: Mapping[str, Any] | None = None,
+    ai_threshold_low: int = AI_GATE_LOW,
+    triage_enabled: bool = False,
+    triage_threshold: int = TRIAGE_GATE,
+    triage_entry_gate: int = TRIAGE_ENTRY_GATE,
+    triage_client: Any | None = None,
+    triage_scores: Mapping[str, dict[str, Any]] | None = None,
+    triage_cache: Any | None = None,
+    triage_max_prompt_tokens: int | None = None,
 ) -> FileReport:
     """扫描单个文件。
 
@@ -1404,6 +1561,21 @@ def scan_file(
 
     `clamav_batch` 是 `tools.clamav_scan_batch(files)` 的返回值：**整批只起一次 clamscan**
     的 ClamAV 结果，①层查表用。不传 = 单文件兜底（每次重新加载库，6.3 s/文件）。
+
+    `ai_threshold_low` = **低档送审**闸门（2026-09-27 两档送审）。路由下界取
+    `effective_low_gate(ai_threshold, ai_threshold_low)`：
+    `score >= 高档` → 高档送审；`低档 <= score < 高档` → 也送 AI（低档）；
+    `< 低档` → 静默放行（不送、不下结论）。`ai_threshold_low=0` = 关掉低档（旧行为）。
+    两个闸门在报告里都留痕（`deterministic.gate` / `gate_low` / `ai_tier`）。
+
+    `triage_*` = **②层 LLM 初筛**（2026-09-27 接进流水线）。只在
+    "未结案 + 预筛分 ∈ [入口, 闸门)" 的文件上说话：初筛分 ≥ `triage_threshold`
+    就把文件送进 ③（**即使它的预筛分没到闸门**），否则静默放行。
+    默认 `triage_enabled=False` —— 这一层要真花钱，必须是显式打开的
+    （`--triage` / `AI_AV_TRIAGE=1`）。`triage_client` 传 `TriageClient`；
+    批处理路径把预算好的分数用 `triage_scores`（sha256 → 初筛记录）传进来，
+    免得每个文件各自起一次调用（并发放大见 10.4）。三样都留痕在
+    `deterministic.triage`，报告抬头与逐文件行都读它。
     """
     try:
         sha256 = compute_sha256(path)
@@ -1485,7 +1657,12 @@ def scan_file(
                                 samples=requested_samples,
                                 unpack=allow_unpack and _unpack_enabled(),
                                 archives=allow_archives and _archives_enabled(),
-                                deterministic=deterministic)
+                                deterministic=deterministic,
+                                # 闸门进缓存键（2026-09-27 两档送审）：同一批文件在两档配置下
+                                # 的结论**不可互换** —— 少了这一项，先跑的基线档会把"未送审"的
+                                # 结论喂给两档档（低档那 16 个文件会被静默跳过，产物看不出异常）。
+                                ai_threshold=ai_threshold,
+                                ai_threshold_low=ai_threshold_low)
         if cached:
             fresh_disp = ({"status": "previously_quarantined", "id": prev.get("id")}
                           if prev and prev.get("status") == "quarantined" else {})
@@ -1495,6 +1672,9 @@ def scan_file(
     evidence = quick_prefilter(
         path, sha256, with_signature=_signature_check_enabled(agent is not None),
         clamav_batch=clamav_batch,
+        # 闸门传给预筛：让报告里的处置/闸门字段跟下面的路由说同一件事
+        ai_threshold=ai_threshold,
+        ai_threshold_low=ai_threshold_low,
     )
 
     # 分流·取证层阈值（2026-09-27）：≤0 = 不分流（全部文件都跑 capa/floss，旧行为）。
@@ -1609,7 +1789,8 @@ def scan_file(
                         cr = scan_file(child, agent=agent, ai_threshold=ai_threshold, store=store,
                                        allow_unpack=True, agent_samples=samples, allow_archives=False,
                                        budget=budget, deterministic=deterministic,
-                                       deep_evidence_threshold=deep_threshold)
+                                       deep_evidence_threshold=deep_threshold,
+                                       ai_threshold_low=ai_threshold_low)
                         child_reports.append(cr)
                         archive_info["children"].append({
                             "name": child.name, "risk": cr.verdict.risk.value,
@@ -1625,14 +1806,118 @@ def scan_file(
         except Exception as exc:  # noqa: BLE001 - 压缩包处理失败不影响主流程
             archive_info = {"error": f"压缩包处理失败: {exc}"}
 
+    # ---- 送审路由（两档，2026-09-27）----
+    # 高档 = `--ai-threshold`（默认 300）；低档 = `--ai-threshold-low`（默认 225，0 = 关掉低档）。
+    # 路由下界由 `criteria.effective_low_gate` 归一 —— 与 `quick_prefilter` 写报告字段
+    # 用的是同一个函数（"闸门怎么用"这件事只能有一处口径）。
+    route_gate = effective_low_gate(ai_threshold, ai_threshold_low)
     budget_blocked = bool(budget is not None and budget.exceeded())
+
+    # ---- ②层 LLM 初筛（2026-09-27 接进流水线）----
+    # 只对**未结案、且预筛分落在初筛入口 ~ 深度 AI 闸门之间**的文件说话：
+    #   · ≥ 闸门的文件由规则直送 ③（初筛不参与 —— 规则已经说"值得看"，拿初筛去筛它
+    #     只会多花钱、还可能把规则说可疑的文件筛掉）；
+    #   · < 入口的文件判据一条都没复合出来，初筛要真花钱，无信号档不烧；
+    #   · ①层结案的文件（ClamAV 签名 / 可信签名 / 白名单）**永不进这一层**（0 token）。
+    # 入口/门槛的来路见 `criteria.TRIAGE_ENTRY_GATE` / `TRIAGE_GATE`，**都是先验值**。
+    triage_used = False
+    triage_score: int | None = None
+    triage_reason = ""
+    triage_source = "none"          # run（这轮真跑）/ cache（吃缓存）/ precomputed（批里跑过）
+    triage_error = ""
+    evidence.deterministic["triage"] = {
+        "enabled": bool(triage_enabled),
+        "entry_gate": effective_triage_entry_gate(triage_entry_gate, ai_threshold),
+        "threshold": int(triage_threshold),
+        "candidate": False,
+        "score": None,
+        "tier": "none",
+        "model": "",
+        "reason": "",
+        "source": "none",
+        "error": "",
+    }
+    # 批次口径一致性：批次这一遍说"它是候选"（所以花了钱），而这里说"不是候选" ——
+    # 两个判断不一致时**显式留痕**，不许静默。2026-09-27 第一遍 r1 就是栽在这上面：
+    # 批次按"没结案"选了 191 个，这里按"签名可信 → 已结案"只跑了 143 个，
+    # 而产物里两个数并排放着、一点异常都看不出来（钱按 191 花的）。
+    if triage_enabled and (triage_scores or {}).get(sha256) is not None and not (
+            not evidence.deterministic.get("sends_to_ai")
+            and is_triage_candidate(evidence.prefilter_score, gate=ai_threshold,
+                                    entry_gate=triage_entry_gate)):
+        evidence.deterministic["triage_batch_candidate_mismatch"] = {
+            "batch": "candidate",
+            "here": ("sends_to_ai" if evidence.deterministic.get("sends_to_ai")
+                     else "not_in_band"),
+            "score": evidence.prefilter_score,
+            "disposition": evidence.deterministic.get("disposition"),
+            "note": ("批次挑了它去初筛，但这一遍的路由说它不该进初筛 —— "
+                     "两处口径不一致（批次那遍的预筛结果与这里不同）"),
+        }
+    if (triage_enabled and not evidence.deterministic.get("sends_to_ai")
+            and is_triage_candidate(evidence.prefilter_score, gate=ai_threshold,
+                                    entry_gate=triage_entry_gate)):
+        record = (triage_scores or {}).get(sha256)
+        if record is not None:
+            triage_source = "precomputed"
+        elif triage_client is not None:
+            record, triage_source = run_triage_one(path, sha256, triage_client,
+                                                   max_prompt_tokens=triage_max_prompt_tokens,
+                                                   cache=triage_cache)
+        triage_used = True
+        if record is not None:
+            raw_score = record.get("score")
+            triage_score = int(raw_score) if raw_score is not None else None
+            triage_reason = str(record.get("reason") or "")
+            triage_error = str(record.get("error") or "")
+        # ⚠️ 拿不到分数（调用失败 / 解析不出）**不算"没过门槛"**：这一档本来就没结案，
+        # 把它记成 drop 等于把一次故障伪装成一个判定。tier 记 none、错误原样留痕，
+        # 报告里能分开"初筛说它不值得看"和"初筛没跑成"。
+        evidence.deterministic["triage"] = {
+            "enabled": True,
+            "entry_gate": effective_triage_entry_gate(triage_entry_gate, ai_threshold),
+            "threshold": int(triage_threshold),
+            "candidate": True,
+            "score": triage_score,
+            "tier": triage_tier(triage_score, threshold=triage_threshold),
+            "model": str((record or {}).get("model") or ""),
+            "reason": triage_reason,
+            "source": triage_source,
+            "error": triage_error,
+            # 这一层自己的 token（成本要能**按文件**拆开报：初筛 vs 深度 AI 是两笔账）。
+            # `usage_source` 跟着走 —— provider 报的与本地估的必须分得开。
+            "total_tokens": int((record or {}).get("total_tokens") or 0),
+            "usage_source": str((record or {}).get("usage_source") or "none"),
+        }
+        if evidence.deterministic["triage"]["tier"] == "select":
+            evidence.deterministic["disposition"] = "send_ai"
+            evidence.deterministic["sends_to_ai"] = True
+            evidence.deterministic["ai_tier"] = "triage"
+            # 这一条**不是判据分**（初筛不动判据表、不加分），所以不该被
+            # `test_every_emitted_reason_is_classified` 当成"幽灵分"来查 ——
+            # 用行尾标记让那条扫描跳过它。判据层一个数都没动。
+            evidence.reasons.append(
+                f"LLM 初筛 {triage_score} ≥ 门槛 {int(triage_threshold)}："
+                f"灰区（入口 {effective_triage_entry_gate(triage_entry_gate, ai_threshold)}"
+                f"~{ai_threshold - 1}）挑出来送深度 AI")  # noqa: unscored-reason
+        else:
+            evidence.reasons.append(
+                f"LLM 初筛 {'失败（' + triage_error + '）' if triage_score is None else triage_score}"
+                f"：未达门槛 {int(triage_threshold)}，静默放行（不下结论）")  # noqa: unscored-reason
+    route_gate = effective_low_gate(ai_threshold, ai_threshold_low)
+    # 初筛选中的文件即使分数低于闸门也要进 ③ —— 这就是这一层的产出。
+    triage_selected = bool(evidence.deterministic["triage"]["tier"] == "select")
+
     if budget_blocked:
         budget.note_skipped()
         error = ("Token 预算已用尽（%d/%d），本文件降级为规则判定"
                  % (budget.used, budget.limit))
         verdict = heuristic_verdict(evidence)
         evidence_sources = attribute_evidence(verdict.evidence, agent_trace, agent_used=False)
-    elif agent is not None and evidence.prefilter_score >= ai_threshold:
+    elif agent is not None and (evidence.prefilter_score >= route_gate or triage_selected):
+        # `route_gate` = 两档里的**低档线**（`--ai-threshold-low`，默认 225）。
+        # 高档（≥`--ai-threshold`）与低档（[低档, 高档)）在这里走的是同一条送审路径 ——
+        # 区别只记在报告字段 `ai_tier` 里（高档/低档），不改判据、不改三档语义。
         retry_infos: list[dict] = []
         try:
             # ---- 确定性证据前置（2026-09-27）：本地一次采齐，0 token ----
@@ -1744,6 +2029,7 @@ def scan_file(
             inner_path = Path(packing["unpack"]["output"])
             inner = scan_file(inner_path, agent=agent, ai_threshold=ai_threshold,
                               deep_evidence_threshold=deep_threshold,
+                              ai_threshold_low=ai_threshold_low,
                               store=store, allow_unpack=False, agent_samples=samples,
                               budget=budget, deterministic=deterministic)
             packing["unpack"].update({
@@ -1877,7 +2163,8 @@ def scan_file(
                        ai_enabled=agent is not None,
                        samples=(agent_samples if agent_samples is not None else _agent_samples()),
                        unpack=allow_unpack and _unpack_enabled(),
-                       archives=allow_archives and _archives_enabled())
+                       archives=allow_archives and _archives_enabled(),
+                       ai_threshold=ai_threshold, ai_threshold_low=ai_threshold_low)
     return final_report
 
 
@@ -1892,35 +2179,76 @@ def scan_files_concurrent(
     deterministic: bool = True,
     deep_evidence_threshold: int | None = None,
     clamav_batch: Mapping[str, Any] | None = None,
+    ai_threshold_low: int = AI_GATE_LOW,
+    triage_enabled: bool = False,
+    triage_threshold: int = TRIAGE_GATE,
+    triage_entry_gate: int = TRIAGE_ENTRY_GATE,
+    triage_client: Any | None = None,
+    triage_cache: Any | None = None,
+    triage_max_prompt_tokens: int | None = None,
 ) -> list[FileReport]:
     """并发扫描多个文件；每个线程使用独立 Agent，避免共享模型客户端。
 
     `clamav_batch` 见 `scan_file` —— 批次是只读的，多线程共享同一个 dict 没问题。
+    `ai_threshold_low` = 低档送审闸门（两档送审，2026-09-27），见 `scan_file`。
+
+    `triage_*` = ②层 LLM 初筛（2026-09-27 接进流水线）。**顺序是刻意的**：
+    先在主线程把候选挑出来、把模型调用**并发**跑完（`collect_triage_scores`，
+    自己的 workers），再把结果当只读字典喂给每个 `scan_file` ——
+    不让每个 worker 各自去调便宜档模型。理由与 10.4 那条一样：
+    并发放大是这台机器上最容易把整轮跑成超时的事。
     """
     if not files:
         return []
 
+    triage_scores: dict[str, dict[str, Any]] | None = None
+    triage_stats: dict[str, Any] | None = None
+    if triage_enabled and triage_client is not None:
+        triage_scores, triage_stats = collect_triage_scores(
+            files, client=triage_client, threshold=triage_threshold,
+            entry_gate=triage_entry_gate, gate=ai_threshold, cache=triage_cache,
+            workers=workers, clamav_batch=clamav_batch,
+            ai_threshold_low=ai_threshold_low,
+            max_prompt_tokens=triage_max_prompt_tokens)
+
     if workers <= 1 or agent_factory is None:
         agent = agent_factory() if agent_factory else None
-        return [scan_file(p, agent, ai_threshold, agent_samples=agent_samples, budget=budget,
-                          store=store, deterministic=deterministic,
-                          deep_evidence_threshold=deep_evidence_threshold,
-                          clamav_batch=clamav_batch)
-                for p in files]
+        reports = [scan_file(p, agent, ai_threshold, agent_samples=agent_samples, budget=budget,
+                             store=store, deterministic=deterministic,
+                             deep_evidence_threshold=deep_evidence_threshold,
+                             clamav_batch=clamav_batch,
+                             ai_threshold_low=ai_threshold_low,
+                             triage_enabled=triage_enabled, triage_threshold=triage_threshold,
+                             triage_entry_gate=triage_entry_gate, triage_client=triage_client,
+                             triage_scores=triage_scores, triage_cache=triage_cache,
+                             triage_max_prompt_tokens=triage_max_prompt_tokens)
+                   for p in files]
+    else:
+        local = threading.local()
 
-    local = threading.local()
+        def work(path: Path) -> FileReport:
+            if not hasattr(local, "agent"):
+                try:
+                    local.agent = agent_factory()
+                except Exception:
+                    local.agent = None
+            return scan_file(path, getattr(local, "agent", None), ai_threshold,
+                             agent_samples=agent_samples, budget=budget, store=store,
+                             deterministic=deterministic,
+                             deep_evidence_threshold=deep_evidence_threshold,
+                             clamav_batch=clamav_batch,
+                             ai_threshold_low=ai_threshold_low,
+                             triage_enabled=triage_enabled, triage_threshold=triage_threshold,
+                             triage_entry_gate=triage_entry_gate, triage_client=triage_client,
+                             triage_scores=triage_scores, triage_cache=triage_cache,
+                             triage_max_prompt_tokens=triage_max_prompt_tokens)
 
-    def work(path: Path) -> FileReport:
-        if not hasattr(local, "agent"):
-            try:
-                local.agent = agent_factory()
-            except Exception:
-                local.agent = None
-        return scan_file(path, getattr(local, "agent", None), ai_threshold,
-                         agent_samples=agent_samples, budget=budget, store=store,
-                         deterministic=deterministic,
-                         deep_evidence_threshold=deep_evidence_threshold,
-                         clamav_batch=clamav_batch)
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
+            reports = list(executor.map(work, files))
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as executor:
-        return list(executor.map(work, files))
+    # ②层的批次统计挂到**每个**报告上（同一批跑出来的东西只能有一份账）：
+    # 汇总脚本因此不必去猜"这一轮到底初筛了几个、选中几个、失败几个"。
+    if triage_stats is not None:
+        for report in reports:
+            report.deterministic["triage_batch"] = triage_stats
+    return reports

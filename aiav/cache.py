@@ -146,20 +146,36 @@ class ScanCache:
 
     # ---------------- 读写 ----------------
     @staticmethod
-    def mode(agent_available: bool, unpack: bool, archives: bool, deterministic: bool = True) -> str:
+    def mode(agent_available: bool, unpack: bool, archives: bool, deterministic: bool = True,
+             ai_threshold: int | None = None, ai_threshold_low: int | None = None) -> str:
         """分析选项指纹：不同选项算出来的结论不能互相顶替。
 
         踩过的坑：`allow_unpack=False` 的那一臂先把"没脱壳"的结论写进缓存，
         随后 `allow_unpack=True` 的一臂直接命中缓存 —— 脱壳步骤被静默跳过。
         同理，消融档 `deterministic=False`（只取模型原始判定）的结论也绝不能
         被线上档命中，否则"策略兜底"会被静默绕过。
+
+        **闸门也是选项**（2026-09-27 两档送审）：`--ai-threshold-low 0` 的那一臂
+        会把 16 个"未送审"的结论写进缓存，随后两档那一臂直接命中 —— 低档送审被静默跳过，
+        而且报告里看不出任何异常（这批文件的 `ai_tier` 会是 `none`）。
+        与"AV 库指纹进缓存键"是同一类坑。`None` = 调用方不关心（老调用点/纯规则工具），
+        这时不写进指纹，缓存键与旧条目保持一致。
         """
-        return (f"ai={int(bool(agent_available))};unpack={int(bool(unpack))}"
+        mode = (f"ai={int(bool(agent_available))};unpack={int(bool(unpack))}"
                 f";archives={int(bool(archives))};det={int(bool(deterministic))}")
+        if ai_threshold is not None or ai_threshold_low is not None:
+            from aiav.criteria import AI_GATE, AI_GATE_LOW
+
+            gate = AI_GATE if ai_threshold is None else int(ai_threshold)
+            gate_low = AI_GATE_LOW if ai_threshold_low is None else int(ai_threshold_low)
+            mode += f";gate={gate};gate_low={gate_low}"
+        return mode
 
     def get(self, sha256: str, *, agent_available: bool, samples: int,
             unpack: bool = True, archives: bool = True,
-            deterministic: bool = True) -> dict[str, Any] | None:
+            deterministic: bool = True,
+            ai_threshold: int | None = None,
+            ai_threshold_low: int | None = None) -> dict[str, Any] | None:
         if not self.enabled or not sha256:
             return None
         path = self._path(sha256)
@@ -175,8 +191,9 @@ class ScanCache:
         # 规则模式的结果不许在有 AI 的 run 里命中（防静默降级）
         if agent_available and not meta.get("ai_enabled"):
             return None
-        # 分析选项必须一致（脱壳/压缩包/AI 开关不同 = 结论不可互换）
-        if meta.get("mode") != self.mode(agent_available, unpack, archives, deterministic):
+        # 分析选项必须一致（脱壳/压缩包/AI 开关/闸门不同 = 结论不可互换）
+        if meta.get("mode") != self.mode(agent_available, unpack, archives, deterministic,
+                                         ai_threshold, ai_threshold_low):
             return None
         if sample_count(meta) < max(1, samples):
             return None
@@ -184,7 +201,9 @@ class ScanCache:
 
     def put(self, sha256: str, report: FileReport, *, ai_enabled: bool, samples: int,
             unpack: bool = True, archives: bool = True,
-            deterministic: bool = True) -> bool:
+            deterministic: bool = True,
+            ai_threshold: int | None = None,
+            ai_threshold_low: int | None = None) -> bool:
         if not self.enabled or not sha256:
             return False
         payload = report.model_dump(mode="json")
@@ -196,7 +215,8 @@ class ScanCache:
                 "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "fingerprints": self.current_fingerprints(),
                 "ai_enabled": ai_enabled,
-                "mode": self.mode(ai_enabled, unpack, archives, deterministic),
+                "mode": self.mode(ai_enabled, unpack, archives, deterministic,
+                                  ai_threshold, ai_threshold_low),
                 "samples": max(1, samples),
                 "cache_version": CACHE_VERSION,
             },
@@ -243,6 +263,115 @@ class ScanCache:
         size = sum(f.stat().st_size for f in files if f.is_file())
         return {"dir": str(self.root), "entries": len(files), "bytes": size,
                 "enabled": self.enabled, "fingerprints": self.current_fingerprints()}
+
+
+TRIAGE_CACHE_VERSION = "1"   # 改初筛摘要/提示词/解析口径时 +1
+
+
+class TriageCache(ScanCache):
+    """LLM 初筛层的缓存（同 sha256 不重算）。
+
+    为什么要独立一个类，而不是复用 `ScanCache`：
+      · `ScanCache` 存的是 `FileReport`（深度 AI 的结论），指纹里带着规则/ClamAV/白名单 ——
+        初筛只依赖**摘要版本 + 提示词 + 模型名**，把 ClamAV 库版本扯进来只会让缓存天天失效；
+      · 更要紧的是**不能互相顶替**：初筛结果不是扫描结论，落进同一个条目空间会被
+        深度 AI 那条路径当成"这个文件已经扫过了"（正是本项目反复踩的"静默跳过"类坑）。
+    复用的是**同一套机制**：sha256 当键、指纹失效、原子写、每文件一条 JSON。
+    """
+
+    def __init__(self, root: Path | None = None, enabled: bool = True,
+                 store_root: Path | None = None) -> None:
+        super().__init__(root=root, enabled=enabled, store_root=store_root)
+
+    @property
+    def fingerprints(self) -> dict[str, str]:
+        if self._fp is None:
+            from aiav.triage import SYSTEM_PROMPT, TRIAGE_VERSION
+
+            self._fp = {
+                "version": TRIAGE_CACHE_VERSION,
+                "triage": TRIAGE_VERSION,
+                "prompt": hashlib.sha256(SYSTEM_PROMPT.encode("utf-8")).hexdigest()[:16],
+            }
+        return self._fp
+
+    def current_fingerprints(self) -> dict[str, str]:
+        return dict(self.fingerprints)
+
+    def _key(self, sha256: str, model: str) -> str:
+        return f"{sha256.lower()}.{model}"
+
+    def _path(self, sha256: str, model: str = "") -> Path:  # type: ignore[override]
+        return self.root / f"{self._key(sha256, model)}.json"
+
+    def get_triage(self, sha256: str, *, model: str, samples: int = 1) -> dict[str, Any] | None:
+        if not self.enabled or not sha256:
+            return None
+        path = self._path(sha256, model)
+        if not path.is_file():
+            return None
+        try:
+            entry = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        meta = entry.get("meta") or {}
+        if meta.get("fingerprints") != self.current_fingerprints():
+            return None
+        if meta.get("model") != model:
+            return None
+        if sample_count(meta) < max(1, samples):
+            return None
+        return entry
+
+    def put_triage(self, sha256: str, result: dict[str, Any], *, model: str,
+                   samples: int = 1) -> bool:
+        if not self.enabled or not sha256:
+            return False
+        entry = {
+            "meta": {
+                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "fingerprints": self.current_fingerprints(),
+                "model": model,
+                "samples": max(1, samples),
+                "cache_version": TRIAGE_CACHE_VERSION,
+            },
+            "result": result,
+        }
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            final = self._path(sha256, model)
+            tmp = final.with_suffix(final.suffix + f".{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+            try:
+                tmp.write_text(json.dumps(entry, ensure_ascii=False), encoding="utf-8")
+                os.replace(tmp, final)
+            finally:
+                if tmp.exists():
+                    try:
+                        tmp.unlink()
+                    except OSError:
+                        pass
+            return True
+        except OSError:
+            return False
+
+    def clear(self) -> int:
+        if not self.root.is_dir():
+            return 0
+        n = 0
+        for f in self.root.glob("*.json"):
+            try:
+                f.unlink()
+                n += 1
+            except OSError:
+                continue
+        return n
+
+
+def default_triage_cache_dir() -> Path:
+    from aiav.disposition import default_store
+
+    return Path(os.getenv("AI_AV_TRIAGE_CACHE_DIR",
+                          str(default_store().root / "triage-cache")))
 
 
 def sample_count(meta: dict[str, Any]) -> int:

@@ -1,0 +1,1008 @@
+{
+  "generated_at": "2026-09-27T20:47:00",
+  "arms": [
+    "r1",
+    "r2"
+  ],
+  "wall_s": {
+    "r1": 941,
+    "r2": 817
+  },
+  "config": "--ai-threshold 200 --ai-threshold-low 0 --triage --triage-threshold 60 --triage-entry-gate 125 --deep-evidence-threshold 300",
+  "price_note": "¥/百万 token 取项目常量（`budget.CNY_PER_MILLION_TOKENS`，偏高的一档 = 上界）；初筛与深度 AI 用的是**同一个单价**，所以两笔账可以相加，但都是上界。",
+  "runs": [
+    {
+      "n": 400,
+      "config": "--ai-threshold 200 --ai-threshold-low 0 --triage --triage-threshold 60 --triage-entry-gate 125 --deep-evidence-threshold 300",
+      "final": {
+        "malicious_total": 200,
+        "benign_total": 200,
+        "recall": 0.995,
+        "recall_hits": 199,
+        "missed": [
+          "06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe"
+        ],
+        "benign_malicious": [],
+        "benign_suspicious": [
+          "51ee81dbc0add93b11aa0d4ad02308243c1c194b4bed94722cb18bcf8f2836cf.exe",
+          "e68d0aff6f9b17d0c48a18f79e0f405f420242ac9c0c4579c8cced7ef699aa46.exe"
+        ],
+        "benign_flagged": [
+          "51ee81dbc0add93b11aa0d4ad02308243c1c194b4bed94722cb18bcf8f2836cf.exe",
+          "e68d0aff6f9b17d0c48a18f79e0f405f420242ac9c0c4579c8cced7ef699aa46.exe"
+        ],
+        "risk": {
+          "malicious": 176,
+          "suspicious": 25,
+          "clean": 199
+        }
+      },
+      "baseline": {
+        "malicious_total": 200,
+        "benign_total": 200,
+        "recall": 0.925,
+        "recall_hits": 185,
+        "missed": [
+          "028bbab37adb09e219c65441bb2fe342d1bae785a3e0a11d5284ed44588fcf86.ole",
+          "029278b8f482f6bea5a20a04bdf2d089d954eaf61e91242e623ef53aa45801ff.exe",
+          "031f7fed1bac11ee81db1494883badc191549dc66d63849ae129f5f83f64e089.exe",
+          "06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe",
+          "0a266ad12d079323f2170811f5195fb51893d5bcbc915e758dc10c0f876d5fb5.exe",
+          "0ad234bb3f6d830cfdb896b8f45b59b8790e72fd3b834242ab1a35a0a7eb21a0.ole",
+          "0ae67dd54368c64d392733680f1cee1864a6a87469137f7c5ea04a216a823ca4.exe",
+          "0d872458d3769d89f034a865b13b4ecddfb4abb4e59c56dcaf53342884bb10a8.exe",
+          "0eddc7ab734587c32dbc9cbd68f2a2efd6acade721bad6f641378c56351ed80d.exe",
+          "0fee54da832c59eeebc1145b86b07bbc8a6a6d6d6f439e638d2c379e73b59f59.exe",
+          "113e1abc1313d617f2c20112a9b8e94a04ed8ed26383ec67391bfad9e959d9ae.exe",
+          "11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe",
+          "121e7f531ee89f859421f5a8fd3295536da20cbbe3d45954a09bad9029d51054.exe",
+          "15dbf11a6447c9e092dbe4e40bcd11a323d5e3971ebf77e009ddcb2750b1419e.exe",
+          "16c7705fef203b88ae0976ed64bac335ad86b376860f826b3eb61f52e9ff692d.exe"
+        ],
+        "benign_malicious": [],
+        "benign_suspicious": [
+          "e68d0aff6f9b17d0c48a18f79e0f405f420242ac9c0c4579c8cced7ef699aa46.exe"
+        ],
+        "benign_flagged": [
+          "e68d0aff6f9b17d0c48a18f79e0f405f420242ac9c0c4579c8cced7ef699aa46.exe"
+        ],
+        "risk": {
+          "malicious": 176,
+          "suspicious": 10,
+          "clean": 214
+        }
+      },
+      "send": {
+        "files": 53,
+        "rate": 0.1325,
+        "by_tier": {
+          "none": 347,
+          "high": 35,
+          "triage": 18
+        },
+        "high": 35,
+        "low": 0,
+        "triage": 18
+      },
+      "closure": {
+        "benign_sent_to_deep_ai": 25,
+        "benign_rehabilitated_clean": 23,
+        "benign_still_flagged": 2,
+        "benign_send_rate": 0.125,
+        "benign_false_positive_rate": 0.01,
+        "benign_malicious_rate": 0.0
+      },
+      "increment": {
+        "missed_before": 15,
+        "recovered": 14,
+        "recovered_rows": [
+          {
+            "name": "0a266ad12d079323f2170811f5195fb51893d5bcbc915e758dc10c0f876d5fb5.exe",
+            "score": 275,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "STRUCT_TEXT_RATIO"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.5,
+            "category": "packed/loader (疑似加壳或加密载荷的加载器)",
+            "summary": "该 PE32 呈现典型的「小 stub + 大载荷」结构：.text 仅占段区原始数据 9.8%，而可写的 .data 段虚拟大小 95928/原始 94208、熵高达 7.991（接近上限），导入表被压缩到只剩 KERNEL32 的 LoadLibraryA/GetProcAddress/VirtualAlloc/VirtualProtect，字符串含 mscoree.dll、user32.dl"
+          },
+          {
+            "name": "11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe",
+            "score": 275,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "STRUCT_TEXT_RATIO"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.55,
+            "category": "疑似加壳/内嵌载荷的 PE（possible loader/dropper，未定性）",
+            "summary": "这是一个 2012 年时间戳的 32 位 GUI PE，导入表很小（KERNEL32/USER32/gdiplus），但 .data 段携带 368KB、熵 7.825 的可写高熵数据块，代码段仅占原始段数据 7.5%，并动态解析 API 且调用 VirtualAlloc/VirtualProtect——形态上是「小 stub + 大载荷」的典型结构，但 YARA 无命中、无 URL/IP、能力识"
+          },
+          {
+            "name": "029278b8f482f6bea5a20a04bdf2d089d954eaf61e91242e623ef53aa45801ff.exe",
+            "score": 275,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "STRUCT_TEXT_RATIO"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.5,
+            "category": "packed/unknown executable",
+            "summary": "该 32 位 PE 呈现典型『极小代码 stub + 超大高熵数据段』形态（.text 虚拟大小仅 1376 字节，占段原始数据约 1.0%；.data 原始 348160 字节、熵 7.606），并存在区段布局异常（.tls 虚拟大小 430451 远超其原始 12288 字节），提示载荷可能被压缩/加密并由 stub 在运行时解出；但本次仅有轻量静态证据，capa/floss 因分流未执行，既"
+          },
+          {
+            "name": "121e7f531ee89f859421f5a8fd3295536da20cbbe3d45954a09bad9029d51054.exe",
+            "score": 275,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "STRUCT_TEXT_RATIO"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.55,
+            "category": "packed_stub（疑似加壳/载荷封装，行为未确认）",
+            "summary": "PE32 GUI EXE，形态是典型的『小 stub + 大块高熵载荷』封装体：.text 只占段区原始数据约 10%，.data 达 364KB 且熵 7.732（疑似压缩/加密数据）；导入表含 VirtualAlloc + LoadLibraryA/GetProcAddress（运行期 API 解析、可执行内存分配）并引用 WININET.dll（网络能力）。但本文件无 YARA 命中、无明文"
+          },
+          {
+            "name": "0fee54da832c59eeebc1145b86b07bbc8a6a6d6d6f439e638d2c379e73b59f59.exe",
+            "score": 275,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "STRUCT_WX_SECTION"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.52,
+            "category": "unknown-native/内核相关可执行体（疑似 rootkit 或反 rootkit/AV 枚举组件）",
+            "summary": "这是一个 32 位、subsystem=1（Native）的 PE，仅导入 HAL.dll 与 ntoskrnl.exe，并带有一个可写可执行段 INIT，形态更接近内核/原生模式组件而非普通用户态程序；字符串中包含一张约 35 项的安全软件进程名单（avp.exe/kav.exe/nod32krn.exe/mcshield.exe/bdss.exe/outpost.exe 等，还包含 rootk"
+          },
+          {
+            "name": "031f7fed1bac11ee81db1494883badc191549dc66d63849ae129f5f83f64e089.exe",
+            "score": 275,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "STRUCT_TEXT_RATIO"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.6,
+            "category": "packed_executable（疑似加壳/加密载荷，未脱壳）",
+            "summary": "该 EXE 呈典型「小 stub + 大加密载荷」形态：代码段 .text 原始数据仅 14.2%（22528/158208 字节），紧随其后是熵值 7.996 的 102912 字节 .Coni 段，且段名均为非常规的 .Obis/.bis/.oypac/.Coni，导入表被裁剪到只剩 4 个 GUI/系统 DLL（无任何可疑 API 暴露），符合打包器/加密器的结构特征。但本文件未做能力识别与"
+          },
+          {
+            "name": "16c7705fef203b88ae0976ed64bac335ad86b376860f826b3eb61f52e9ff692d.exe",
+            "score": 275,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "STRUCT_TEXT_RATIO"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.55,
+            "category": "packed/unknown (疑似加壳的未分类 PE)",
+            "summary": "这是一个 PE32 GUI 程序，形态上是「极小代码 stub + 大体积高熵可写数据段 + 异常 .tls 空洞段」：.text 原始数据仅 32768 字节（占全部段原始数据 6.6%），而 .data 原始 434176 字节、熵 7.195 且可写，.tls 声明 317760 字节虚拟大小却只有 4096 字节原始数据（熵 0，加载后为零填充可写内存）；导入表同时含 LoadLibrar"
+          },
+          {
+            "name": "0ae67dd54368c64d392733680f1cee1864a6a87469137f7c5ea04a216a823ca4.exe",
+            "score": 225,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "PACKING"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.5,
+            "category": "packed/unknown executable",
+            "summary": "32 位 PE（2012 年时间戳），.text/.rdata 熵接近 8.0、导入表极小且含 GetProcAddress，形态与加壳/加密载荷一致；YARA 无命中、字符串无网络 IOC。按分流策略本次未运行 capa/floss（能力识别与解混淆串未做），也未脱壳，因此无法判断壳内载荷是否恶意——只能给到 suspicious，需要脱壳/动态分析后再定性。"
+          },
+          {
+            "name": "113e1abc1313d617f2c20112a9b8e94a04ed8ed26383ec67391bfad9e959d9ae.exe",
+            "score": 225,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "PACKING"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.5,
+            "category": "packed/unknown (possible packed downloader stub)",
+            "summary": "32 位 PE，仅 3 个区段，唯一的可执行节 .text 熵值 7.63（预筛据此标记『疑似加壳』），并用 LoadLibraryA/GetProcAddress 做动态 API 解析，另含 '\\system32\\cabinet.dll' 字符串，形态上像压缩/自解压或加壳的轻量载荷；但本次按分流口径未运行 capa_scan / floss_scan（预筛分 225 < 300），也未做任何脱"
+          },
+          {
+            "name": "0eddc7ab734587c32dbc9cbd68f2a2efd6acade721bad6f641378c56351ed80d.exe",
+            "score": 125,
+            "criteria": [
+              "HIGH_RISK_EXTENSION"
+            ],
+            "triage_score": 62,
+            "triage_tier": "select",
+            "ai_tier": "triage",
+            "risk": "suspicious",
+            "confidence": 0.4,
+            "category": "unclassified PE (possible dropper/loader)",
+            "summary": "一个 32 位 GUI PE（90KB，未加壳，区段熵正常），除 LoadLibraryA/GetProcAddress 动态解析外没有确定性恶意信号：无 YARA 命中、无 URL/IP、无持久化或注入相关字符串，也无内嵌签名信息。因预筛分数 125 低于分流阈值，本次未做能力识别与解混淆串提取，无法排除动态加载的载荷，故只能判 unknown/suspicious 而非恶意，也无法证实其为良性"
+          },
+          {
+            "name": "028bbab37adb09e219c65441bb2fe342d1bae785a3e0a11d5284ed44588fcf86.ole",
+            "score": 125,
+            "criteria": [
+              "HIGH_RISK_EXTENSION"
+            ],
+            "triage_score": 60,
+            "triage_tier": "select",
+            "ai_tier": "triage",
+            "risk": "suspicious",
+            "confidence": 0.35,
+            "category": "ole_container_unclassified",
+            "summary": "251392 字节的 .ole 复合文档：本机 OLE 目录探针未发现 VBA/宏存储，strings_ioc 未提取到任何 URL/IP/可疑字符串，YARA 也无命中——没有任何可指向恶意行为的确定性证据；但该文件的可执行面（Excel 4.0 XLM 宏表、嵌入对象/包、以及 OLE 解析类漏洞路径）本次并未被实际检查，且无签名与多引擎信息佐证，证据不足以下 clean 结论，按可疑待人工复"
+          },
+          {
+            "name": "0d872458d3769d89f034a865b13b4ecddfb4abb4e59c56dcaf53342884bb10a8.exe",
+            "score": 125,
+            "criteria": [
+              "HIGH_RISK_EXTENSION"
+            ],
+            "triage_score": 78,
+            "triage_tier": "select",
+            "ai_tier": "triage",
+            "risk": "suspicious",
+            "confidence": 0.6,
+            "category": "unknown",
+            "summary": "该 32 位 PE（142KB，md5 时间戳 2012-05-04）带一个自签名 Authenticode 签名，签名者 CN 为随机字符串「uoNgfxqhoXQ6sDaYELX7C0Cu5」且 subject==issuer（自签发、trusted_signer=false、无时间戳），签名生成的 not_before(2012-05-04 12:56:56) 与 PE 编译时间戳(1336"
+          },
+          {
+            "name": "15dbf11a6447c9e092dbe4e40bcd11a323d5e3971ebf77e009ddcb2750b1419e.exe",
+            "score": 125,
+            "criteria": [
+              "HIGH_RISK_EXTENSION"
+            ],
+            "triage_score": 68,
+            "triage_tier": "select",
+            "ai_tier": "triage",
+            "risk": "suspicious",
+            "confidence": 0.58,
+            "category": "suspicious PE (possible trojan/dropper, self-signed fake signer)",
+            "summary": "32 位 GUI PE（142KB，编译时间戳 2012-05-04）。内嵌 Authenticode 签名虽然摘要自校验一致，但签发者是一个随机字符串 CN、自签自受信、未被信任且无时间戳，呈明显伪造签名特征；导入表含 LoadLibraryA/GetProcAddress 动态解析与 VirtualAllocEx 远程内存分配；明文串出现 \\system32\\cabinet.dll 与 sol"
+          },
+          {
+            "name": "0ad234bb3f6d830cfdb896b8f45b59b8790e72fd3b834242ab1a35a0a7eb21a0.ole",
+            "score": 125,
+            "criteria": [
+              "HIGH_RISK_EXTENSION"
+            ],
+            "triage_score": 65,
+            "triage_tier": "select",
+            "ai_tier": "triage",
+            "risk": "suspicious",
+            "confidence": 0.3,
+            "category": "ole-container/unknown",
+            "summary": "这是一个 .ole（OLE 复合文档）二进制容器，可用的两项本地检查均未发现恶意内容：宏分析未检出宏，字符串/IOC 提取为空（无 URL、IP、可疑关键字）。不可据此定性为恶意，文件类型也无法用 PE/脚本/宏工具进一步拆解，故按证据不足的灰区处理。"
+          }
+        ],
+        "still_missed": [
+          "06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe"
+        ],
+        "triage_selected": 18,
+        "triage_selected_clean": 12,
+        "triage_selected_flag": 6,
+        "triage_selected_clean_rows": [
+          {
+            "name": "86f32f026eb0dd6a4d547179e5c0cb326c8c259bd791012e54a6f98455799887.exe",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 62,
+            "risk": "clean",
+            "confidence": 0.65,
+            "summary": "该 .exe 是内嵌 Authenticode 签名有效、内容与已知开源通知工具 Notifu 吻合的普通 Windows 程序（导入表为常规 GUI/系统 API，无加壳），未发现恶意迹象；capa/floss 能力识别与 VT 多引擎本次均未执行，属检测边界。"
+          },
+          {
+            "name": "d3dcb6b7c05940a0507e5ec8138a44a03c76bf2da34c757cb207c6eb4ab22b9b.exe",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 75,
+            "risk": "clean",
+            "confidence": 0.6,
+            "summary": "32 位控制台 PE，导入表集中在 EFS/加密/身份 API（EFSUTIL/FeClient/CRYPT32/bcrypt/NTDSAPI/DSROLE）并含字符串 \"CIPHER.EXE\"，形态与 Windows 的 EFS 加密命令行工具一致；无加壳、无网络 IOC、无 YARA 命中，被标记的两个 API（GetProcAddress/VirtualAlloc）属通用动态加载用法，不构成"
+          },
+          {
+            "name": "a952f28b9281645b82f71eedf00a68dd629d7a679bef62d33758528306c4593a.ole",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 60,
+            "risk": "clean",
+            "confidence": 0.62,
+            "summary": "该文件虽以 .ole 扩展名送审，但内容实际上是照片图像数据（JPEG/EXIF+XMP 元数据，dc:format=\"image/jpeg\"，Canon EOS REBEL T2i 拍摄、Adobe Photoshop CS3 处理），不包含宏、脚本、URL/IP 或可执行载荷；未发现任何恶意信号，属于扩展名与真实内容不符的良性图片文件。"
+          },
+          {
+            "name": "80730d31243d7a31e7f6796aae2ad2168ab8201ad4800f632abc0239b35d04fe.ole",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 72,
+            "risk": "clean",
+            "confidence": 0.55,
+            "summary": "该文件是一个 9KB 的 OLE 复合文档容器，未检出任何宏、可疑关键字、URL/IP 或 YARA 命中；唯一送审信号是「高风险扩展名 .ole」和 LLM 初筛灰区分值，这些都不构成恶意证据。在只读条件下未发现可执行或投放载荷的能力，按现有证据倾向 benign，但分析面很窄（非 PE，无外部引擎票数），结论存在不确定性。"
+          },
+          {
+            "name": "8b8716f706607fc8f3012e6ec850a4c5dbe985be0f572d7279cf89466c756c59.ole",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 68,
+            "risk": "clean",
+            "confidence": 0.6,
+            "summary": "46KB 的 OLE 复合文档，本机工具未发现宏、无可疑字符串/URL/IP，YARA 无命中；没有任何确定性恶意证据，判定为 clean，仅因送审门限（LLM 灰区 68 分）与 .ole 扩展名被挑出，属于低置信度送审而非风险信号。"
+          },
+          {
+            "name": "0cc6ad38534c09c71a7f9366d9561d48aef9616a643466707969714c7595fd57.ole",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 72,
+            "risk": "clean",
+            "confidence": 0.5,
+            "summary": "该文件是一个 41KB 的 OLE（CFBF）容器，本次唯一的确定性内容级输出（strings_ioc）为空：无任何高价值字符串、URL 或 IP；YARA 无命中。送审理由仅为 .ole 高风险扩展名与 LLM 初筛灰区分数（72），属启发式信号而非确定性证据，不构成恶意判定依据。因此按现有证据判 clean，但需说明本次未对 OLE 内部流（如 WordDocument / VBA 存储）做实"
+          },
+          {
+            "name": "82599dba34b4cf08f41cd37b88e261f7480aebd9075fc41e2fbbae81ca3b4b9a.ole",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 78,
+            "risk": "clean",
+            "confidence": 0.6,
+            "summary": "该文件是 OLE 复合文档（.ole），未发现任何恶意特征：无 YARA 命中、无 VBA 宏、无 URL/IP/可疑字符串。仅有的送审理由是高风险扩展名与 LLM 灰区评分，缺乏实质恶意证据，倾向判定为良性。"
+          },
+          {
+            "name": "64354378404d42f492613b144a6d0b3418261f27a380a8a4387424fe0e3ffbc1.exe",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 74,
+            "risk": "clean",
+            "confidence": 0.8,
+            "summary": "Garena Online Pte Ltd 内嵌 Authenticode 签名的 PE32 启动器，签名校验通过且重算摘要与签名时一致（未被篡改），字符串与 Garena《Heroes of Newerth》多地区启动器（GAMELAUNCHER.exe / HON*Launcher.exe）吻合，导入的进程创建、模块加载与网络 API 属启动器的正常功能，无恶意证据。"
+          },
+          {
+            "name": "341e757fe21e236ff2162c678f940558196ae1988a5f5efc4a4b25e425fa0ea0.exe",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 64,
+            "risk": "clean",
+            "confidence": 0.6,
+            "summary": "该文件是一个基于 libcurl 的 x64 控制台命令行工具（疑似 curl 类下载 CLI，MinGW 工具链构建），静态特征与合法网络客户端一致：只导入 KERNEL32/WS2_32/libcurl-4.dll/libz.dll/msvcrt.dll，字符串为 curl 帮助文本与官方文档链接，无加壳、无高熵段、无异常写执行段。LLM 初筛 64 分落在灰区，但预筛 YARA 零命中，按分"
+          },
+          {
+            "name": "54e26855769ea12c6fc9d4d3ea5c8e8a09cc4ea3a11865adba124f6d77d48de5.exe",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 65,
+            "risk": "clean",
+            "confidence": 0.55,
+            "summary": "32 位 Windows GUI 程序，区段结构/熵值正常、导入表为常规 Win32 与网络查询 API、无可疑 API、无 URL/IP、YARA 无命中；字符串中的 whoami.exe 与 netutils/wkscli/SspiCli 组合指向本机账户与域/网络信息查询类工具，而非明显恶意载荷。唯一未覆盖维度：因预筛 125 < 300 分流阈值，capa_scan / floss_sca"
+          },
+          {
+            "name": "e29835e30a82311d856dc8ac8ba70b5f10f9cd6465a76a0f6423ed1b36dad744.exe",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 62,
+            "risk": "clean",
+            "confidence": 0.76,
+            "summary": "该文件是 BugSplat LLC 签名的崩溃报告发送组件（BsSndRpt.exe / BugSplatRc.dll 相关），内嵌 Authenticode 签名有效、带可信时间戳且 PE 摘要与签名一致，未发现恶意行为的确定性证据；判为干净。"
+          },
+          {
+            "name": "7f55070a0cc197156894cc6fd3ea883025550b99f8c6df77a1d26f06f82a0ee7.ole",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 63,
+            "risk": "clean",
+            "confidence": 0.6,
+            "summary": "该 .ole 为 OLE 复合文件，实测未包含任何 VBA 宏，也未命中任何可疑宏关键字；文件中可提取的高价值字符串仅是一组 Adobe XMP/RDF 元数据命名空间和 ICC 色彩配置相关文本（IEC http://www.iec.ch），没有外部下载地址、IP、命令行或脚本载荷。结合 YARA 无命中，倾向判定为携带图片/文档元数据的良性 OLE 容器；受工具视野限制（未枚举 OLE 内部流"
+          }
+        ],
+        "triage_selected_flag_rows": [
+          {
+            "name": "028bbab37adb09e219c65441bb2fe342d1bae785a3e0a11d5284ed44588fcf86.ole",
+            "label": "malicious",
+            "score": 125,
+            "triage_score": 60,
+            "risk": "suspicious",
+            "confidence": 0.35
+          },
+          {
+            "name": "0d872458d3769d89f034a865b13b4ecddfb4abb4e59c56dcaf53342884bb10a8.exe",
+            "label": "malicious",
+            "score": 125,
+            "triage_score": 78,
+            "risk": "suspicious",
+            "confidence": 0.6
+          },
+          {
+            "name": "0eddc7ab734587c32dbc9cbd68f2a2efd6acade721bad6f641378c56351ed80d.exe",
+            "label": "malicious",
+            "score": 125,
+            "triage_score": 62,
+            "risk": "suspicious",
+            "confidence": 0.4
+          },
+          {
+            "name": "15dbf11a6447c9e092dbe4e40bcd11a323d5e3971ebf77e009ddcb2750b1419e.exe",
+            "label": "malicious",
+            "score": 125,
+            "triage_score": 68,
+            "risk": "suspicious",
+            "confidence": 0.58
+          },
+          {
+            "name": "0ad234bb3f6d830cfdb896b8f45b59b8790e72fd3b834242ab1a35a0a7eb21a0.ole",
+            "label": "malicious",
+            "score": 125,
+            "triage_score": 65,
+            "risk": "suspicious",
+            "confidence": 0.3
+          },
+          {
+            "name": "51ee81dbc0add93b11aa0d4ad02308243c1c194b4bed94722cb18bcf8f2836cf.exe",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 78,
+            "risk": "suspicious",
+            "confidence": 0.42
+          }
+        ]
+      },
+      "layers": {
+        "layer1_closed_malicious": 171,
+        "layer1_closed_clean": 51,
+        "layer1_closed": 222,
+        "layer2_candidates": 143,
+        "layer2_selected": 18,
+        "layer2_dropped": 125,
+        "layer2_no_score": 0,
+        "layer2_unresolved_after": 125,
+        "layer3_ai_files": 53,
+        "layer3_malicious": 6,
+        "layer3_suspicious": 24,
+        "layer3_clean": 23
+      },
+      "cost": {
+        "triage_tokens": 218696,
+        "triage_files": 143,
+        "triage_usage_estimated_entries": 0,
+        "deep_ai_tokens": 483869,
+        "deep_ai_files": 53,
+        "total_tokens": 702565,
+        "cny_per_million": 8.0,
+        "triage_cny": 1.7496,
+        "deep_ai_cny": 3.871,
+        "total_cny": 5.6205
+      },
+      "verification": {
+        "triage_failed": 0,
+        "triage_errors": [
+          "empty_output(finish_reason=length)"
+        ],
+        "ai_degraded": 0,
+        "scan_errors": 0,
+        "unclassified_signals": 0,
+        "clamav_unavailable": 0,
+        "clamav_batch_errors": 0,
+        "baseline_score_mismatch": []
+      },
+      "timing": {
+        "wall_s": 941,
+        "preload_files": 53,
+        "preload_ms_sum": 120738.0,
+        "preload_ms_mean": 2278.1,
+        "preload_ms_max": 13706.5,
+        "preload_deep_skipped": 25
+      }
+    },
+    {
+      "n": 400,
+      "config": "--ai-threshold 200 --ai-threshold-low 0 --triage --triage-threshold 60 --triage-entry-gate 125 --deep-evidence-threshold 300",
+      "final": {
+        "malicious_total": 200,
+        "benign_total": 200,
+        "recall": 0.98,
+        "recall_hits": 196,
+        "missed": [
+          "028bbab37adb09e219c65441bb2fe342d1bae785a3e0a11d5284ed44588fcf86.ole",
+          "06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe",
+          "0ad234bb3f6d830cfdb896b8f45b59b8790e72fd3b834242ab1a35a0a7eb21a0.ole",
+          "0eddc7ab734587c32dbc9cbd68f2a2efd6acade721bad6f641378c56351ed80d.exe"
+        ],
+        "benign_malicious": [],
+        "benign_suspicious": [
+          "51ee81dbc0add93b11aa0d4ad02308243c1c194b4bed94722cb18bcf8f2836cf.exe",
+          "8d8491cb71fb375f6509a6521c09f685368530ba2eed68abc8cab2f45828a65e.exe",
+          "e68d0aff6f9b17d0c48a18f79e0f405f420242ac9c0c4579c8cced7ef699aa46.exe"
+        ],
+        "benign_flagged": [
+          "51ee81dbc0add93b11aa0d4ad02308243c1c194b4bed94722cb18bcf8f2836cf.exe",
+          "8d8491cb71fb375f6509a6521c09f685368530ba2eed68abc8cab2f45828a65e.exe",
+          "e68d0aff6f9b17d0c48a18f79e0f405f420242ac9c0c4579c8cced7ef699aa46.exe"
+        ],
+        "risk": {
+          "malicious": 179,
+          "suspicious": 20,
+          "clean": 201
+        }
+      },
+      "baseline": {
+        "malicious_total": 200,
+        "benign_total": 200,
+        "recall": 0.925,
+        "recall_hits": 185,
+        "missed": [
+          "028bbab37adb09e219c65441bb2fe342d1bae785a3e0a11d5284ed44588fcf86.ole",
+          "029278b8f482f6bea5a20a04bdf2d089d954eaf61e91242e623ef53aa45801ff.exe",
+          "031f7fed1bac11ee81db1494883badc191549dc66d63849ae129f5f83f64e089.exe",
+          "06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe",
+          "0a266ad12d079323f2170811f5195fb51893d5bcbc915e758dc10c0f876d5fb5.exe",
+          "0ad234bb3f6d830cfdb896b8f45b59b8790e72fd3b834242ab1a35a0a7eb21a0.ole",
+          "0ae67dd54368c64d392733680f1cee1864a6a87469137f7c5ea04a216a823ca4.exe",
+          "0d872458d3769d89f034a865b13b4ecddfb4abb4e59c56dcaf53342884bb10a8.exe",
+          "0eddc7ab734587c32dbc9cbd68f2a2efd6acade721bad6f641378c56351ed80d.exe",
+          "0fee54da832c59eeebc1145b86b07bbc8a6a6d6d6f439e638d2c379e73b59f59.exe",
+          "113e1abc1313d617f2c20112a9b8e94a04ed8ed26383ec67391bfad9e959d9ae.exe",
+          "11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe",
+          "121e7f531ee89f859421f5a8fd3295536da20cbbe3d45954a09bad9029d51054.exe",
+          "15dbf11a6447c9e092dbe4e40bcd11a323d5e3971ebf77e009ddcb2750b1419e.exe",
+          "16c7705fef203b88ae0976ed64bac335ad86b376860f826b3eb61f52e9ff692d.exe"
+        ],
+        "benign_malicious": [],
+        "benign_suspicious": [
+          "e68d0aff6f9b17d0c48a18f79e0f405f420242ac9c0c4579c8cced7ef699aa46.exe"
+        ],
+        "benign_flagged": [
+          "e68d0aff6f9b17d0c48a18f79e0f405f420242ac9c0c4579c8cced7ef699aa46.exe"
+        ],
+        "risk": {
+          "malicious": 176,
+          "suspicious": 10,
+          "clean": 214
+        }
+      },
+      "send": {
+        "files": 50,
+        "rate": 0.125,
+        "by_tier": {
+          "none": 350,
+          "high": 35,
+          "triage": 15
+        },
+        "high": 35,
+        "low": 0,
+        "triage": 15
+      },
+      "closure": {
+        "benign_sent_to_deep_ai": 25,
+        "benign_rehabilitated_clean": 22,
+        "benign_still_flagged": 3,
+        "benign_send_rate": 0.125,
+        "benign_false_positive_rate": 0.015,
+        "benign_malicious_rate": 0.0
+      },
+      "increment": {
+        "missed_before": 15,
+        "recovered": 11,
+        "recovered_rows": [
+          {
+            "name": "0a266ad12d079323f2170811f5195fb51893d5bcbc915e758dc10c0f876d5fb5.exe",
+            "score": 275,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "STRUCT_TEXT_RATIO"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.55,
+            "category": "packed loader / dropper stub（疑似加壳载入器）",
+            "summary": "该 172KB PE 是一个体积极小的原生 stub（.text 仅 15608 字节虚拟大小、16384 原始字节）配一个 94208 字节、熵 7.991 的可写 .data 大块，导入表只挂 KERNEL32 且带 LoadLibraryA/GetProcAddress/VirtualAlloc/VirtualProtect，字符串中另有 mscoree.dll —— 符合“小引导代码 + "
+          },
+          {
+            "name": "11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe",
+            "score": 275,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "STRUCT_TEXT_RATIO"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.5,
+            "category": "packer/loader（疑似加壳可执行体，载荷未解出）",
+            "summary": "这是一个 PE32 GUI 程序，形态高度符合「小代码 stub + 大体积高熵可写载荷」的加壳/加载器结构：.text 仅占原始段数据约 7.5%，.data 可写且熵 7.825，其虚拟大小（753588）约为文件内原始大小（376832）的两倍，并导入 LoadLibraryA/GetProcAddress/VirtualAlloc/VirtualProtect 做动态 API 解析与内存改"
+          },
+          {
+            "name": "029278b8f482f6bea5a20a04bdf2d089d954eaf61e91242e623ef53aa45801ff.exe",
+            "score": 275,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "STRUCT_TEXT_RATIO"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.5,
+            "category": "packed/encrypted PE (possibly trojan dropper)",
+            "summary": "PE32 GUI 程序呈典型「小 stub + 大载荷」形态：.text 仅 1376 字节（占段区原始数据约 1.0%），而可写的 .data 段 345276 字节、熵 7.606（接近随机，提示加密/压缩载荷），.tls 段 virtual_size 430451 却只有 12288 原始字节、熵 0.073，段表明显反常；导入表含 GetProcAddress / VirtualProte"
+          },
+          {
+            "name": "121e7f531ee89f859421f5a8fd3295536da20cbbe3d45954a09bad9029d51054.exe",
+            "score": 275,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "STRUCT_TEXT_RATIO"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.5,
+            "category": "packed loader / possible dropper",
+            "summary": "该文件是一个 32 位无签名的 Windows 可执行体，形态高度符合『小代码 stub + 大体积高熵载荷』：.data 段原始 364544 字节（约占全文件 82%）熵 7.732，而 .text 仅 45056 字节（占段区原始数据 10.3%），且导入表含 VirtualAlloc/LoadLibraryA/GetProcAddress 的动态解析组合与 WININET 网络库，字符串中"
+          },
+          {
+            "name": "0fee54da832c59eeebc1145b86b07bbc8a6a6d6d6f439e638d2c379e73b59f59.exe",
+            "score": 275,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "STRUCT_WX_SECTION"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.55,
+            "category": "kernel-driver / security-software-evasion (rootkit-like, unconfirmed)",
+            "summary": "该文件是一个 PE32（i386、Subsystem=1 Native）模块，导入 ntoskrnl.exe 与 HAL.dll，形态上是内核态/驱动类组件，并含一个可写可执行段 INIT；字符串中内嵌了一份较完整的杀软/安全产品进程名清单（avp.exe、kav.exe、nod32krn.exe、mcshield.exe、ccapp.exe、fsav32.exe 等）以及反 Rootkit 工具"
+          },
+          {
+            "name": "031f7fed1bac11ee81db1494883badc191549dc66d63849ae129f5f83f64e089.exe",
+            "score": 275,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "STRUCT_TEXT_RATIO"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.55,
+            "category": "packed/obfuscated PE (疑似加壳或加密载荷，能力未定)",
+            "summary": "该文件是一个 32 位 GUI PE，结构上表现为『极小代码 stub + 超大高熵非执行载荷』：.text 原始数据仅 22528 字节（占区段原始数据 14.2%），而 .Coni 段 102912 字节、熵 7.996 接近满值，且伴随 4 个非标准段名（.Obis/.bis/.oypac/.Coni）与一个 virtual/raw 严重失衡的可写 .data 段，符合加壳/加密保护产物的形"
+          },
+          {
+            "name": "16c7705fef203b88ae0976ed64bac335ad86b376860f826b3eb61f52e9ff692d.exe",
+            "score": 275,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "STRUCT_TEXT_RATIO"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.42,
+            "category": "unknown / 疑似加壳或自解压载荷（PE32 可执行体）",
+            "summary": "这是一个 503KB 的 32 位 GUI PE，.text 代码段仅占原始数据约 6.6%（32KB），而 .data 段近 434KB 且熵 7.195，另有一个虚拟大小 317760、原始仅 4096 且熵为 0 的 .tls 段——形态上像「小加载器 + 大块（可能压缩/加密）载荷」。导入表中存在 LoadLibraryA/GetProcAddress/VirtualAlloc/Virtu"
+          },
+          {
+            "name": "0ae67dd54368c64d392733680f1cee1864a6a87469137f7c5ea04a216a823ca4.exe",
+            "score": 225,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "PACKING"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.4,
+            "category": "packed-executable/unknown",
+            "summary": "32 位 GUI PE，.text/.rdata 熵接近 7.97（正常编译代码通常 6.3 左右），导入表异常精简（仅 ADVAPI32/AVIFIL32/KERNEL32/WINMM，其中只有 GetProcAddress 被标为可疑），且 .data 虚拟大小 512024 字节而原始大小仅 12288 字节——形态与加壳/自解密加载器一致，但本次没有任何载荷级证据可证实或排除恶意（capa"
+          },
+          {
+            "name": "113e1abc1313d617f2c20112a9b8e94a04ed8ed26383ec67391bfad9e959d9ae.exe",
+            "score": 225,
+            "criteria": [
+              "HIGH_RISK_EXTENSION",
+              "PACKING"
+            ],
+            "triage_score": null,
+            "triage_tier": "none",
+            "ai_tier": "high",
+            "risk": "suspicious",
+            "confidence": 0.5,
+            "category": "packed/unknown（疑似加壳的自解压/投放型可执行体）",
+            "summary": "这是一个 32 位 Windows GUI PE（.exe），只含 .text/.data/.reloc 三个区段，可执行节 .text 原始大小≈虚拟大小且熵高达 7.63，导入表极小（仅 5 个 DLL，且只突出 GetProcAddress/LoadLibraryA），符合加壳/压缩 stub 的形态；字符串中只有 DLL 名和 \\system32\\cabinet.dll（Windows 解"
+          },
+          {
+            "name": "0d872458d3769d89f034a865b13b4ecddfb4abb4e59c56dcaf53342884bb10a8.exe",
+            "score": 125,
+            "criteria": [
+              "HIGH_RISK_EXTENSION"
+            ],
+            "triage_score": 82,
+            "triage_tier": "select",
+            "ai_tier": "triage",
+            "risk": "suspicious",
+            "confidence": 0.55,
+            "category": "suspicious PE (疑似灰产/注入类工具，未确认载荷)",
+            "summary": "32 位 GUI PE（142432 字节，.text 熵 6.26 属正常编译产物），静态导入含 KERNEL32!VirtualAllocEx、LoadLibraryA、GetProcAddress，段表中存在两个 raw_size=1024、熵为 0.0 的可执行空段（.d/.d2），字符串出现 \"sol.exe\" 与 \"\\system32\\cabinet.dll\"，无 URL/IP。文件带"
+          },
+          {
+            "name": "15dbf11a6447c9e092dbe4e40bcd11a323d5e3971ebf77e009ddcb2750b1419e.exe",
+            "score": 125,
+            "criteria": [
+              "HIGH_RISK_EXTENSION"
+            ],
+            "triage_score": 78,
+            "triage_tier": "select",
+            "ai_tier": "triage",
+            "risk": "malicious",
+            "confidence": 0.68,
+            "category": "trojan",
+            "summary": "该 32 位 PE 携带一个自签名、不受信任且证书主体为随机字符串(CN=uoNgfxqhoXQ6sDaYELX7C0Cu5、自签、SHA1、无时间戳)的内嵌 Authenticode 签名，并导入 LoadLibraryA/GetProcAddress/VirtualAllocEx 等动态解析与远程进程内存写入 API，字符串中出现 \\system32\\cabinet.dll(压缩包解包)与 s"
+          }
+        ],
+        "still_missed": [
+          "028bbab37adb09e219c65441bb2fe342d1bae785a3e0a11d5284ed44588fcf86.ole",
+          "06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe",
+          "0ad234bb3f6d830cfdb896b8f45b59b8790e72fd3b834242ab1a35a0a7eb21a0.ole",
+          "0eddc7ab734587c32dbc9cbd68f2a2efd6acade721bad6f641378c56351ed80d.exe"
+        ],
+        "triage_selected": 15,
+        "triage_selected_clean": 12,
+        "triage_selected_flag": 3,
+        "triage_selected_clean_rows": [
+          {
+            "name": "d3dcb6b7c05940a0507e5ec8138a44a03c76bf2da34c757cb207c6eb4ab22b9b.exe",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 60,
+            "risk": "clean",
+            "confidence": 0.7,
+            "summary": "该文件与 Windows 内置加密工具 cipher.exe（EFS 文件加密命令行工具）的形态高度一致：导入表集中在 EFSUTIL/FeClient/DSROLE/NTDSAPI/CRYPT32/bcrypt 等加密与域角色相关的系统 DLL，字符串中包含自身名 CIPHER.EXE 与 asInvoker 清单；无 YARA 命中、无高熵区段、无网络 IOC，未见任何恶意行为证据。按既定分流"
+          },
+          {
+            "name": "558a14d8e2ff665755afc5f80b4830b08f956e2eb01daa8568a9f9c714f3671c.exe",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 60,
+            "risk": "clean",
+            "confidence": 0.8,
+            "summary": "该文件是 TeamViewer GmbH 有效内嵌签名的 32 位 PE 组件（TeamViewer 客户端/安装辅助模块，含 InvokerHelperBackend 输入注入辅助类，含 http://www.teamviewer.com 字样），签名摘要校验一致且带可信时间戳；PE 结构常规、无可疑加壳或高熵段，未见网络/C2 相关导入与字符串。按本次分流策略未做 capa/floss 能力识"
+          },
+          {
+            "name": "33d869a74dbd68243d75d97c92ce1b3052117c729b81e79098e7c5b0ba4881f8.ole",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 62,
+            "risk": "clean",
+            "confidence": 0.55,
+            "summary": "该 .ole（OLE 复合文档）文件未发现任何恶意迹象：宏分析显示不含 VBA 宏、无可疑宏关键字，字符串提取无 URL/IP/可疑关键字，YARA 无命中。仅有的送审理由是扩展名和一次低于门槛的 LLM 初筛（62），均不构成恶意证据。判定为 clean，但因未做 OLE 流结构深度解析且无 VT 外部情报，置信度有限。"
+          },
+          {
+            "name": "1d2d450742e4ed4fb8486fd7e3892828dd97bbf63f0e23b0975725bdc18ce766.exe",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 65,
+            "risk": "clean",
+            "confidence": 0.55,
+            "summary": "64 位 GUI PE，仅 3KB 代码 + 约 49KB 资源段，导入表只有 KERNEL32/SHELL32/USER32/UCRT 与 msvcrt，无任何可疑 API，manifest 为普通 asInvoker + dpiAware，明文字符串含 WINVER.EXE 与 Microsoft WindowsSettings 命名空间，整体形态符合一个显示 Windows 版本信息的小型 "
+          },
+          {
+            "name": "e0e61d43bb747cbf2c318f32f0e405abf96ca648afedc0c697bf9af9c5d62ad1.ole",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 68,
+            "risk": "clean",
+            "confidence": 0.55,
+            "summary": "该 .ole 文件未检出任何恶意特征：YARA 无命中，strings_ioc 未提取到任何可疑字符串/URL/IP，宏分析显示不含宏且无可疑模式；送审仅因 .ole 高风险扩展名与 LLM 初筛灰区分数，属启发式提示而非实质证据。因文件类型为 OLE 复合文档，capa/floss/脚本/PDF 等分析面不适用，且未做 VirusTotal 多引擎比对，判定为 clean 但置信度中等。"
+          },
+          {
+            "name": "82599dba34b4cf08f41cd37b88e261f7480aebd9075fc41e2fbbae81ca3b4b9a.ole",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 68,
+            "risk": "clean",
+            "confidence": 0.55,
+            "summary": "这是一个 45KB 的 OLE 复合文档容器，非 PE、无 VBA 宏、无可疑字符串/URL/IP，YARA 零命中，所有对本次文件类型适用的确定性检测均为阴性；除扩展名本身与 LLM 灰区评分外没有任何恶意行为证据，故按 clean 处理，但容器内部对象未做进一步拆解，仍有残余不确定性。"
+          },
+          {
+            "name": "98361245c72daba37699a95ef5b60e43ce8e580da45f04969dc2b9d30e7a92bc.ole",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 72,
+            "risk": "clean",
+            "confidence": 0.62,
+            "summary": "该文件是一个 OLE 复合文档容器（含嵌入式对象），本次取证未发现任何宏、脚本、URL/IP 或恶意字符串，YARA 无命中；在所有已执行的检测维度上均无恶意迹象，按 clean 处理，但因未做容器内部流级解析与多引擎扫描，仍有残余不确定性。"
+          },
+          {
+            "name": "341e757fe21e236ff2162c678f940558196ae1988a5f5efc4a4b25e425fa0ea0.exe",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 60,
+            "risk": "clean",
+            "confidence": 0.6,
+            "summary": "预筛未发现明显恶意特征。"
+          },
+          {
+            "name": "98ba00e70a005017c3665741803e8b36938fc9efb0c4821c675f2c100936c5eb.exe",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 62,
+            "risk": "clean",
+            "confidence": 0.85,
+            "summary": "该文件是 NVIDIA 的配置文件更新组件 NvProfileUpdater.exe（带 NVIDIA Corporation 有效内嵌 Authenticode 签名且已时间戳），签名重算摘要与文件一致（未被篡改）。其网络与 CreateProcess 行为可由自身功能（从 https://services.gfe.nvidia.com/ 下载配置更新并调用 dbInstaller.exe）完整"
+          },
+          {
+            "name": "abc8861cd68131b3f5a9bb73c748946e119e08f7d997df9557a8c9fc0a09b588.exe",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 72,
+            "risk": "clean",
+            "confidence": 0.62,
+            "summary": "这是一个 2017 年编译的 x86 Visual C++ 2010 GUI 程序（1.37MB，正常区段布局、无高熵区段、无壳迹象），导入表与字符串显示它使用 comctl32/uxtheme/richedit 等界面组件与 winsock 网络库，没有发现任何恶意行为的确凿证据；预筛无 YARA 命中，送审仅由『.exe 扩展名 + LLM 初筛灰区』触发。按既定分流口径，capa 能力识别与"
+          },
+          {
+            "name": "7f55070a0cc197156894cc6fd3ea883025550b99f8c6df77a1d26f06f82a0ee7.ole",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 62,
+            "risk": "clean",
+            "confidence": 0.6,
+            "summary": "该 .ole 实为 OLE 复合文档（office_macro_analyze 可正常解析并返回 has_macros=false），不含宏、不含可执行脚本；唯一 'string' 面是 Adobe RDF/XMP 元数据命名空间（内嵌图片/文档元数据），无 IP、无可疑 URL、YARA 无命中。除扩展名与灰区初筛分外无任何实质恶意信号，倾向判定为良性文档。"
+          },
+          {
+            "name": "729d140140c3af5b46031f1a7652b159b08721afa80776f17afe73633800afc1.exe",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 68,
+            "risk": "clean",
+            "confidence": 0.62,
+            "summary": "32 位 Windows 控制台程序，区段正常、无高熵、无网络/Persistence 字符串，导入表仅 KERNEL32/SHLWAPI，可疑 API（CreateProcessW/LoadLibraryW/GetProcAddress）与字符串中的 shebang 处理提示一致，形态是一个启动/包装其它命令行程序的工具类程序，未发现任何恶意行为证据；本次未跑 capa/floss（分流策略），"
+          }
+        ],
+        "triage_selected_flag_rows": [
+          {
+            "name": "0d872458d3769d89f034a865b13b4ecddfb4abb4e59c56dcaf53342884bb10a8.exe",
+            "label": "malicious",
+            "score": 125,
+            "triage_score": 82,
+            "risk": "suspicious",
+            "confidence": 0.55
+          },
+          {
+            "name": "15dbf11a6447c9e092dbe4e40bcd11a323d5e3971ebf77e009ddcb2750b1419e.exe",
+            "label": "malicious",
+            "score": 125,
+            "triage_score": 78,
+            "risk": "malicious",
+            "confidence": 0.68
+          },
+          {
+            "name": "51ee81dbc0add93b11aa0d4ad02308243c1c194b4bed94722cb18bcf8f2836cf.exe",
+            "label": "clean",
+            "score": 125,
+            "triage_score": 62,
+            "risk": "suspicious",
+            "confidence": 0.4
+          }
+        ]
+      },
+      "layers": {
+        "layer1_closed_malicious": 171,
+        "layer1_closed_clean": 51,
+        "layer1_closed": 222,
+        "layer2_candidates": 143,
+        "layer2_selected": 15,
+        "layer2_dropped": 127,
+        "layer2_no_score": 1,
+        "layer2_unresolved_after": 128,
+        "layer3_ai_files": 49,
+        "layer3_malicious": 9,
+        "layer3_suspicious": 19,
+        "layer3_clean": 21
+      },
+      "cost": {
+        "triage_tokens": 198094,
+        "triage_files": 143,
+        "triage_usage_estimated_entries": 0,
+        "deep_ai_tokens": 438437,
+        "deep_ai_files": 49,
+        "total_tokens": 636531,
+        "cny_per_million": 8.0,
+        "triage_cny": 1.5848,
+        "deep_ai_cny": 3.5075,
+        "total_cny": 5.0922
+      },
+      "verification": {
+        "triage_failed": 1,
+        "triage_errors": [
+          "json_decode_error_unrecoverable"
+        ],
+        "ai_degraded": 1,
+        "scan_errors": 1,
+        "unclassified_signals": 0,
+        "clamav_unavailable": 0,
+        "clamav_batch_errors": 0,
+        "baseline_score_mismatch": []
+      },
+      "timing": {
+        "wall_s": 817,
+        "preload_files": 50,
+        "preload_ms_sum": 119308.9,
+        "preload_ms_mean": 2386.2,
+        "preload_ms_max": 14117.7,
+        "preload_deep_skipped": 25
+      }
+    }
+  ],
+  "consistency": {
+    "files": 400,
+    "route_same": 381,
+    "route_rate": 0.9525,
+    "verdict_same": 391,
+    "verdict_rate": 0.9775,
+    "triage_score_same": 271,
+    "triage_score_rate": 0.6775,
+    "route_diff": [
+      "028bbab37adb09e219c65441bb2fe342d1bae785a3e0a11d5284ed44588fcf86.ole",
+      "0ad234bb3f6d830cfdb896b8f45b59b8790e72fd3b834242ab1a35a0a7eb21a0.ole",
+      "0cc6ad38534c09c71a7f9366d9561d48aef9616a643466707969714c7595fd57.ole",
+      "0eddc7ab734587c32dbc9cbd68f2a2efd6acade721bad6f641378c56351ed80d.exe",
+      "1d2d450742e4ed4fb8486fd7e3892828dd97bbf63f0e23b0975725bdc18ce766.exe",
+      "33d869a74dbd68243d75d97c92ce1b3052117c729b81e79098e7c5b0ba4881f8.ole",
+      "54e26855769ea12c6fc9d4d3ea5c8e8a09cc4ea3a11865adba124f6d77d48de5.exe",
+      "558a14d8e2ff665755afc5f80b4830b08f956e2eb01daa8568a9f9c714f3671c.exe",
+      "64354378404d42f492613b144a6d0b3418261f27a380a8a4387424fe0e3ffbc1.exe",
+      "729d140140c3af5b46031f1a7652b159b08721afa80776f17afe73633800afc1.exe",
+      "80730d31243d7a31e7f6796aae2ad2168ab8201ad4800f632abc0239b35d04fe.ole",
+      "86f32f026eb0dd6a4d547179e5c0cb326c8c259bd791012e54a6f98455799887.exe",
+      "8b8716f706607fc8f3012e6ec850a4c5dbe985be0f572d7279cf89466c756c59.ole",
+      "98361245c72daba37699a95ef5b60e43ce8e580da45f04969dc2b9d30e7a92bc.ole",
+      "98ba00e70a005017c3665741803e8b36938fc9efb0c4821c675f2c100936c5eb.exe",
+      "a952f28b9281645b82f71eedf00a68dd629d7a679bef62d33758528306c4593a.ole",
+      "abc8861cd68131b3f5a9bb73c748946e119e08f7d997df9557a8c9fc0a09b588.exe",
+      "e0e61d43bb747cbf2c318f32f0e405abf96ca648afedc0c697bf9af9c5d62ad1.ole",
+      "e29835e30a82311d856dc8ac8ba70b5f10f9cd6465a76a0f6423ed1b36dad744.exe"
+    ],
+    "verdict_diff": [
+      "028bbab37adb09e219c65441bb2fe342d1bae785a3e0a11d5284ed44588fcf86.ole",
+      "0ad234bb3f6d830cfdb896b8f45b59b8790e72fd3b834242ab1a35a0a7eb21a0.ole",
+      "0bfa7a40d9f8e32f28720aae89d8966b53e0c4d365f5c8bdd64d9c1ff8bae1e0.exe",
+      "0c721326ca95022900e1c18fda6cdb4db532ae9c804228985c6df980b3be7ea1.exe",
+      "0eddc7ab734587c32dbc9cbd68f2a2efd6acade721bad6f641378c56351ed80d.exe",
+      "0ff9b5d6f6c55ed9cfeead24755b7e9e081f75bfc4972ac09b3b4ef83c581954.exe",
+      "127d0ea2270cfe31dd36c5cf1e2e090c020d8a0cdda69b6177cad5573cba5208.exe",
+      "15dbf11a6447c9e092dbe4e40bcd11a323d5e3971ebf77e009ddcb2750b1419e.exe",
+      "8d8491cb71fb375f6509a6521c09f685368530ba2eed68abc8cab2f45828a65e.exe"
+    ]
+  }
+}

@@ -30,14 +30,25 @@ def test_signal_unit_derivation():
     assert 12 * C.SIGNAL_UNIT == C.AI_GATE == 300
 
 
-def test_weak_signal_alone_never_crosses_the_gate():
-    """一条弱信号过不了闸门 —— 这是"必须复合"的全部意义。"""
+def test_weak_signal_alone_never_crosses_the_high_gate():
+    """一条弱信号过不了**高档**闸门 —— 这是"必须复合"的全部意义。
+
+    ⚠️ 2026-09-27 两档送审之后的措辞变化：闸门拆成高档 300 / 低档 225 之后，
+    单条得分落在 `[225, 300)` 的判据（`XLM_EXEC_PATTERN` / `XLM_CHAR_CELLS`，各 250）
+    会**从低档送 AI** —— 这是那次决策买的东西，不是 bug。所以这里把不变式钉在
+    **高档**上：单条弱信号永远进不了高档（`ai_tier == "high"`），
+    它在低档还是静默，由 `ai_tier()` 说了算（两条断言一起看，口径就不会漂）。
+    """
     for crit in C.CRITERIA.values():
         if crit.conclusive or crit.score >= C.AI_GATE:
             continue
         verdict = C.decide([C.CriterionHit(crit.heur_id, crit.name)])
-        assert verdict.disposition is C.Disposition.PASS, (
-            f"{crit.heur_id} 单条就过了闸门（{verdict.score}），弱信号不许单独顶过门槛"
+        tier = C.ai_tier(verdict.score)
+        assert tier != "high", (
+            f"{crit.heur_id} 单条就进了高档（{verdict.score}），弱信号不许单独顶过高档门槛"
+        )
+        assert (verdict.disposition is C.Disposition.SEND_AI) == (tier in ("high", "low")), (
+            f"{crit.heur_id} 的处置与档位对不上：{verdict.disposition} / {tier}"
         )
 
 
@@ -178,12 +189,21 @@ def test_no_criterion_scores_into_the_conclusive_band_by_accident():
 
 
 def _emitted_reasons() -> list[tuple[str, str]]:
-    """扫产出方源码，把每一处 `reasons.append(...)` 的第一个字符串字面量捞出来。"""
+    """扫产出方源码，把每一处 `reasons.append(...)` 的第一个字符串字面量捞出来。
+
+    行尾带 `# noqa: unscored-reason` 的跳过：那是**说明性**理由（例如 ②层 LLM 初筛
+    "挑出来送深度 AI"），它**不加分、不进判据表**，被当成幽灵分来查是误报。
+    """
     out: list[tuple[str, str]] = []
     pattern = re.compile(r"reasons\.append\(\s*(f?)(\"\"\"|'''|\"|')(.*?)\2", re.S)
     for path in sorted((REPO / "aiav").glob("*.py")):
         text = path.read_text(encoding="utf-8")
-        for m in pattern.finditer(text):
+        for line in text.splitlines():
+            if "noqa: unscored-reason" in line:
+                continue
+            m = pattern.search(line)
+            if not m:
+                continue
             literal = m.group(3)
             if literal.startswith("#"):
                 continue
@@ -555,3 +575,66 @@ def test_clamav_fingerprint_invalidates_the_cache_when_the_signature_db_changes(
     # 指纹要真的进缓存键（不是算出来没人用）
     c = cache.ScanCache(root=__import__("pathlib").Path("/tmp/nonexistent-cache-fp"))
     assert "clamav" in c.current_fingerprints()
+
+
+# --------------------------------------------------------------------------------------
+# 闸门（`--ai-threshold`）必须出现在报告里（2026-09-27 阈值扫描扫出来的坑）
+# --------------------------------------------------------------------------------------
+
+def test_prefilter_disposition_follows_the_runtime_gate(tmp_path):
+    """处置/闸门字段要跟着 `--ai-threshold` 走，不能写死 300。
+
+    扫阈值那一轮踩到的：`--ai-threshold 100` 跑出来的报告里，105 个真送了 AI 的文件
+    有 104 个被标成 `pass`（"未结案"）—— 因为 `quick_prefilter` 里的处置是用**硬编码的
+    `AI_GATE`** 算的，不认运行时闸门。结果就是"产物自己看不出这一档送了多少审"。
+
+    `.exe` 光靠 `HIGH_RISK_EXTENSION` 就是 125 分：默认闸门 300 下是"未结案"，
+    闸门调到 100 就该是 `send_ai` —— 与 `scan_file` 里的路由判据同一件事。
+    """
+    from aiav import scanner
+
+    p = tmp_path / "plain.exe"
+    p.write_bytes(b"MZ" + b"\x00" * 64)
+    sha = scanner.compute_sha256(p)
+
+    default = scanner.quick_prefilter(p, sha)
+    assert default.prefilter_score == 125
+    assert default.deterministic["disposition"] == "pass"
+    assert default.deterministic["gate"] == 300
+    assert default.deterministic["sends_to_ai"] is False
+
+    lowered = scanner.quick_prefilter(p, sha, ai_threshold=100)
+    assert lowered.prefilter_score == 125
+    assert lowered.deterministic["disposition"] == "send_ai"
+    assert lowered.deterministic["gate"] == 100
+    assert lowered.deterministic["sends_to_ai"] is True
+
+    # 闸门调高到分数之上 → 又回到未结案（闸门是**可双向**的，不是只降不升）
+    raised = scanner.quick_prefilter(p, sha, ai_threshold=200)
+    assert raised.deterministic["disposition"] == "pass"
+    assert raised.deterministic["gate"] == 200
+
+
+def test_report_ledger_shows_the_runtime_gate_not_the_constant():
+    """报告抬头的"①层闸门"必须是这一轮真正用的那个 —— 否则扫阈值时读不出配置。"""
+    from aiav import report as R
+    from aiav.models import FileReport, RiskLevel, Verdict
+
+    def _rec(gate: int) -> FileReport:
+        return FileReport(
+            path="/x/a.exe", sha256="0" * 64, size=1, extension=".exe", prefilter_score=125,
+            verdict=Verdict(risk=RiskLevel.clean, confidence=1.0, category="clean",
+                            summary="", evidence=[], recommended_action="ignore"),
+            deterministic={"disposition": "send_ai", "score": 125, "gate": gate},
+        )
+
+    assert R.build_summary([_rec(100)])["deterministic"]["gate"] == 100
+    assert R.build_summary([_rec(50)])["deterministic"]["gate"] == 50
+    # 老产物（缓存里的，闸门字段还是满值）→ 取众数，不炸
+    assert R.build_summary([_rec(100), _rec(100), _rec(300)])["deterministic"]["gate"] == 100
+    # 一条都没有 gate 字段（老报告形状）→ 退回常量，不许 KeyError
+    bare = FileReport(path="/x/b.exe", sha256="1" * 64, size=1, extension=".exe",
+                      prefilter_score=0,
+                      verdict=Verdict(risk=RiskLevel.clean, confidence=1.0, category="clean",
+                                      summary="", evidence=[], recommended_action="ignore"))
+    assert R.build_summary([bare])["deterministic"]["gate"] == 300

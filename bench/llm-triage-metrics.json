@@ -1,0 +1,1628 @@
+{
+ "generated_at": "2026-09-27 16:59:15",
+ "model": "deepseek-v4.1-flash",
+ "source": {
+  "gray": "bench/dike-gray-triage.json",
+  "rules_scan": "/tmp/dike400-norules/scan_20260927_164610.audit.json"
+ },
+ "composition": {
+  "125": {
+   "malicious": 6,
+   "benign": 137,
+   "total": 143
+  },
+  "225": {
+   "malicious": 2,
+   "benign": 2,
+   "total": 4
+  },
+  "275": {
+   "malicious": 7,
+   "benign": 4,
+   "total": 11
+  }
+ },
+ "n": {
+  "total": 158,
+  "scored": 158,
+  "unscored": 0,
+  "malicious": 15,
+  "benign": 143,
+  "bucket125": 143
+ },
+ "cost": {
+  "files": 158,
+  "ok": 158,
+  "failed": 0,
+  "from_cache": 20,
+  "charged_files": 138,
+  "prompt_tokens": 109099,
+  "completion_tokens": 81511,
+  "total_tokens": 190610,
+  "avg_tokens_per_file": 1381.2,
+  "avg_prompt_tokens": 790.6,
+  "estimated_entries": 0,
+  "parse_modes": {
+   "strict_json": 138
+  },
+  "repaired_or_fallback": 0,
+  "usage_source": "provider",
+  "cny_per_million_tokens": 8.0,
+  "cost_cny": 1.5249,
+  "price_source": "project constant (budget.CNY_PER_MILLION_TOKENS) — upper bound for flash tier"
+ },
+ "verification": {
+  "model_called": true,
+  "failed_entries": 0,
+  "degraded_entries": 0,
+  "from_cache": 20,
+  "usage_source": "provider",
+  "estimated_entries": 0,
+  "parse_modes": {
+   "strict_json": 138
+  },
+  "repaired_or_fallback": 0,
+  "all_rows_have_score_or_error": true,
+  "verdict_batch_usable": true
+ },
+ "auc": {
+  "llm_gray_zone_all": 0.873,
+  "llm_bucket125": 0.7208,
+  "rule_score_gray_zone_all": 0.7804,
+  "rule_score_bucket125": 0.5
+ },
+ "per_bucket": [
+  {
+   "prefilter_score": 125,
+   "n": {
+    "total": 143,
+    "malicious": 6,
+    "benign": 137
+   },
+   "auc_llm": 0.7208,
+   "malicious_scores": [
+    12,
+    25,
+    55,
+    58,
+    72,
+    78
+   ],
+   "benign_median": 28,
+   "benign_max": 75
+  },
+  {
+   "prefilter_score": 225,
+   "n": {
+    "total": 4,
+    "malicious": 2,
+    "benign": 2
+   },
+   "auc_llm": 1.0,
+   "malicious_scores": [
+    65,
+    78
+   ],
+   "benign_median": 44.0,
+   "benign_max": 58
+  },
+  {
+   "prefilter_score": 275,
+   "n": {
+    "total": 11,
+    "malicious": 7,
+    "benign": 4
+   },
+   "auc_llm": 0.8571,
+   "malicious_scores": [
+    64,
+    65,
+    66,
+    72,
+    72,
+    78,
+    80
+   ],
+   "benign_median": 46.0,
+   "benign_max": 72
+  }
+ ],
+ "score_distribution": {
+  "malicious": {
+   "n": 15,
+   "min": 12,
+   "median": 66,
+   "max": 80
+  },
+  "benign": {
+   "n": 143,
+   "min": 5,
+   "median": 28,
+   "max": 75
+  }
+ },
+ "sweep": [
+  {
+   "threshold": 0,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 1.0,
+   "recall_hits": 15,
+   "benign_sent": 143,
+   "benign_send_rate": 1.0,
+   "sent_total": 158,
+   "precision_sent": 0.0949
+  },
+  {
+   "threshold": 5,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 1.0,
+   "recall_hits": 15,
+   "benign_sent": 143,
+   "benign_send_rate": 1.0,
+   "sent_total": 158,
+   "precision_sent": 0.0949
+  },
+  {
+   "threshold": 10,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 1.0,
+   "recall_hits": 15,
+   "benign_sent": 130,
+   "benign_send_rate": 0.9091,
+   "sent_total": 145,
+   "precision_sent": 0.1034
+  },
+  {
+   "threshold": 15,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.9333,
+   "recall_hits": 14,
+   "benign_sent": 118,
+   "benign_send_rate": 0.8252,
+   "sent_total": 132,
+   "precision_sent": 0.1061
+  },
+  {
+   "threshold": 20,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.9333,
+   "recall_hits": 14,
+   "benign_sent": 95,
+   "benign_send_rate": 0.6643,
+   "sent_total": 109,
+   "precision_sent": 0.1284
+  },
+  {
+   "threshold": 25,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.9333,
+   "recall_hits": 14,
+   "benign_sent": 82,
+   "benign_send_rate": 0.5734,
+   "sent_total": 96,
+   "precision_sent": 0.1458
+  },
+  {
+   "threshold": 30,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.8667,
+   "recall_hits": 13,
+   "benign_sent": 70,
+   "benign_send_rate": 0.4895,
+   "sent_total": 83,
+   "precision_sent": 0.1566
+  },
+  {
+   "threshold": 35,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.8667,
+   "recall_hits": 13,
+   "benign_sent": 62,
+   "benign_send_rate": 0.4336,
+   "sent_total": 75,
+   "precision_sent": 0.1733
+  },
+  {
+   "threshold": 40,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.8667,
+   "recall_hits": 13,
+   "benign_sent": 50,
+   "benign_send_rate": 0.3497,
+   "sent_total": 63,
+   "precision_sent": 0.2063
+  },
+  {
+   "threshold": 45,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.8667,
+   "recall_hits": 13,
+   "benign_sent": 41,
+   "benign_send_rate": 0.2867,
+   "sent_total": 54,
+   "precision_sent": 0.2407
+  },
+  {
+   "threshold": 50,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.8667,
+   "recall_hits": 13,
+   "benign_sent": 29,
+   "benign_send_rate": 0.2028,
+   "sent_total": 42,
+   "precision_sent": 0.3095
+  },
+  {
+   "threshold": 55,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.8667,
+   "recall_hits": 13,
+   "benign_sent": 25,
+   "benign_send_rate": 0.1748,
+   "sent_total": 38,
+   "precision_sent": 0.3421
+  },
+  {
+   "threshold": 60,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.7333,
+   "recall_hits": 11,
+   "benign_sent": 12,
+   "benign_send_rate": 0.0839,
+   "sent_total": 23,
+   "precision_sent": 0.4783
+  },
+  {
+   "threshold": 65,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.6667,
+   "recall_hits": 10,
+   "benign_sent": 6,
+   "benign_send_rate": 0.042,
+   "sent_total": 16,
+   "precision_sent": 0.625
+  },
+  {
+   "threshold": 70,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.4667,
+   "recall_hits": 7,
+   "benign_sent": 4,
+   "benign_send_rate": 0.028,
+   "sent_total": 11,
+   "precision_sent": 0.6364
+  },
+  {
+   "threshold": 75,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.2667,
+   "recall_hits": 4,
+   "benign_sent": 1,
+   "benign_send_rate": 0.007,
+   "sent_total": 5,
+   "precision_sent": 0.8
+  },
+  {
+   "threshold": 80,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.0667,
+   "recall_hits": 1,
+   "benign_sent": 0,
+   "benign_send_rate": 0.0,
+   "sent_total": 1,
+   "precision_sent": 1.0
+  },
+  {
+   "threshold": 85,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.0,
+   "recall_hits": 0,
+   "benign_sent": 0,
+   "benign_send_rate": 0.0,
+   "sent_total": 0,
+   "precision_sent": null
+  },
+  {
+   "threshold": 90,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.0,
+   "recall_hits": 0,
+   "benign_sent": 0,
+   "benign_send_rate": 0.0,
+   "sent_total": 0,
+   "precision_sent": null
+  }
+ ],
+ "recommendation": {
+  "criterion": "max recall s.t. benign_send_rate <= 10%",
+  "pick": {
+   "threshold": 60,
+   "malicious_total": 15,
+   "benign_total": 143,
+   "recall": 0.7333,
+   "recall_hits": 11,
+   "benign_sent": 12,
+   "benign_send_rate": 0.0839,
+   "sent_total": 23,
+   "precision_sent": 0.4783
+  },
+  "marginal_cost_near_pick": {
+   "from_threshold": 55,
+   "to_threshold": 60,
+   "step": 5,
+   "extra_malicious_if_lowered": 2,
+   "extra_benign_if_lowered": 13,
+   "benign_per_extra_malicious": 6.5
+  }
+ },
+ "missed_malicious_detail": [
+  {
+   "name": "06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe",
+   "score": 12,
+   "bucket": 125,
+   "category": null,
+   "reason": "摘要显示为典型 MFC42u/msvcrt 编译的旧式 Windows 程序，导入表含 GetModuleFileNameW、SendMessageW、AppendMenuW 等常规 GUI API，字符串均为 C++ 运行时与窗口消息相关，无网络/注入/持久化迹象。"
+  },
+  {
+   "name": "0ad234bb3f6d830cfdb896b8f45b59b8790e72fd3b834242ab1a35a0a7eb21a0.ole",
+   "score": 25,
+   "bucket": 125,
+   "category": null,
+   "reason": "扩展名为 .ole 但字符串出现 [Content_Types].xml、xl/workbook.xml 等 OOXML 路径，整体熵 7.863，符合被改名的 ZIP/XLSX 压缩文档，异常有限。"
+  },
+  {
+   "name": "0eddc7ab734587c32dbc9cbd68f2a2efd6acade721bad6f641378c56351ed80d.exe",
+   "score": 55,
+   "bucket": 125,
+   "category": null,
+   "reason": "导入表仅 3 个 DLL/36 条 API 却包含 GetProcAddress+LoadLibraryA 动态解析组合，.text 熵 6.46 偏高，且前 20 条字符串全是“D$ PhO||g”“jLZSUV”这类无意义代码碎片，指向加壳/混淆的加载器特征。"
+  },
+  {
+   "name": "028bbab37adb09e219c65441bb2fe342d1bae785a3e0a11d5284ed44588fcf86.ole",
+   "score": 58,
+   "bucket": 125,
+   "category": null,
+   "reason": "OLE 容器整体熵达 7.873，字符串除 Microsoft Enhanced Cryptographic Provider v1.0 外均为随机短串，Workbook 内容疑似加密/混淆载荷，虽无宏存储但仍具可疑性。"
+  },
+  {
+   "name": "029278b8f482f6bea5a20a04bdf2d089d954eaf61e91242e623ef53aa45801ff.exe",
+   "score": 64,
+   "bucket": 275,
+   "category": null,
+   "reason": "小 .text(4KB) 配 340KB 高熵 .data(ent=7.61, 可写) 载荷，且导入 GetProcAddress 与 VirtualProtect 用于动态解析和改内存权限，呈加壳/藏载荷特征。"
+  },
+  {
+   "name": "031f7fed1bac11ee81db1494883badc191549dc66d63849ae129f5f83f64e089.exe",
+   "score": 65,
+   "bucket": 275,
+   "category": null,
+   "reason": "存在非标准节名（.Obis/.oypac/.Coni）且 .Coni 节 100KB 熵高达 8.0、整体熵 7.758，配合入口点所在的 .text 仅 22KB 却导入 CreateThread，呈现典型加壳/加密载荷特征，但导入表含 101 条常规 GDI/user32 API 尚无明确恶意行为串。"
+  },
+  {
+   "name": "113e1abc1313d617f2c20112a9b8e94a04ed8ed26383ec67391bfad9e959d9ae.exe",
+   "score": 65,
+   "bucket": 225,
+   "category": null,
+   "reason": ".text 段 90KB 熵高达 7.63 且文件偏移顺序前 20 条字符串全为 nqtPC{cAMpre\"g、vqtMFpulT\\anMxeW1、[LE1UT 这类乱码，导入表仅 13 条 API 却含 LoadLibraryA+GetProcAddress 动态解析，符合加壳/加密载荷特征。"
+  },
+  {
+   "name": "0a266ad12d079323f2170811f5195fb51893d5bcbc915e758dc10c0f876d5fb5.exe",
+   "score": 66,
+   "bucket": 275,
+   "category": null,
+   "reason": "仅导入 kernel32 且出现 GetProcAddress/LoadLibraryA/VirtualAlloc/VirtualProtect/CreateThread，同时 .data 段 92KB 熵高达 7.99，呈稀疏导入加高熵载荷的加壳/注入特征。"
+  },
+  {
+   "name": "0fee54da832c59eeebc1145b86b07bbc8a6a6d6d6f439e638d2c379e73b59f59.exe",
+   "score": 72,
+   "bucket": 275,
+   "category": null,
+   "reason": "导入表仅 hal.dll 与 ntoskrnl.exe，且字符串含 KeServiceDescriptorTable 和 \\SystemRoot\\System32\\ntoskrnl.exe，配合 INIT 段 XWR，符合内核驱动/SSDT 挂钩类可疑载荷特征。"
+  },
+  {
+   "name": "15dbf11a6447c9e092dbe4e40bcd11a323d5e3971ebf77e009ddcb2750b1419e.exe",
+   "score": 72,
+   "bucket": 125,
+   "category": null,
+   "reason": "导入表同时含 VirtualAllocEx、GetKeyState、BitBlt/GetDC 以及 GetProcAddress/LoadLibraryA 动态解析，叠加 .text 高熵和前20条字符串多为乱码/加密样，特征组合强烈指向可疑载荷。"
+  },
+  {
+   "name": "16c7705fef203b88ae0976ed64bac335ad86b376860f826b3eb61f52e9ff692d.exe",
+   "score": 72,
+   "bucket": 275,
+   "category": null,
+   "reason": "可写 .data 段高达 424KB 且熵 7.2（接近加密/压缩载荷），整体熵 7.045，同时导入表含 GetProcAddress/LoadLibraryA 动态解析与 VirtualAlloc/VirtualProtect 内存改写，且字符串区几乎全是二进制噪声，符合加壳或内存加载载荷特征。"
+  },
+  {
+   "name": "0ae67dd54368c64d392733680f1cee1864a6a87469137f7c5ea04a216a823ca4.exe",
+   "score": 78,
+   "bucket": 225,
+   "category": null,
+   "reason": ".rdata 段 188KB 且熵高达 7.96、.text 熵 7.97，导入表仅 4 个 DLL/9 条 API 却包含 GetProcAddress 与 VirtualProtectEx（动态解析+改内存保护），且字符串全为 '9O9+H\\'、'?<zKc8' 一类随机密文，符合加壳/加密载荷+注入特征。"
+  },
+  {
+   "name": "0d872458d3769d89f034a865b13b4ecddfb4abb4e59c56dcaf53342884bb10a8.exe",
+   "score": 78,
+   "bucket": 125,
+   "category": null,
+   "reason": "导入表含 VirtualAllocEx、GetProcAddress/LoadLibraryA 动态解析，并配合 GetKeyState、BitBlt/GetDC 等按键/屏幕相关 API，且前 20 条字符串多为高熵乱码，指向混淆的注入或窃密行为。"
+  },
+  {
+   "name": "11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe",
+   "score": 78,
+   "bucket": 275,
+   "category": null,
+   "reason": ".data 段 368KB 熵高达 7.82、整体熵 7.627，字符串全为 `t#SSUP`/`_^][YY` 等解密后残留的指令碎片，配合导入表中的 GetProcAddress/LoadLibraryA 动态解析与 VirtualAlloc/VirtualProtect 内存改写，符合加壳或加密载荷自解密特征。"
+  },
+  {
+   "name": "121e7f531ee89f859421f5a8fd3295536da20cbbe3d45954a09bad9029d51054.exe",
+   "score": 80,
+   "bucket": 275,
+   "category": null,
+   "reason": ".data 段达 356KB 且熵 7.73（整体熵 7.49）属高熵可写载荷，导入表中 wininet 与 VirtualAlloc、CreateThread、GetProcAddress、LoadLibraryA 组合指向运行时解密+联网下载执行链。"
+  }
+ ],
+ "high_score_benign_detail": [
+  {
+   "name": "abc8861cd68131b3f5a9bb73c748946e119e08f7d997df9557a8c9fc0a09b588.exe",
+   "score": 75,
+   "bucket": 125,
+   "reason": "导入表 564 条 API 中同时出现 GetAsyncKeyState、GetKeyState、GetForegroundWindow 与 OpenClipboard、BitBlt/CreateCompatibleDC（键盘记录+剪贴板+屏幕截取组合），且 IsDebuggerPresent/CreateThread/GetProcAddress 动态调用并存，指向窃密类行为；.text 熵 6.39 且字符串区多为乱码代码片段、无版本资源信息。"
+  },
+  {
+   "name": "51ee81dbc0add93b11aa0d4ad02308243c1c194b4bed94722cb18bcf8f2836cf.exe",
+   "score": 72,
+   "bucket": 125,
+   "reason": "56KB 的 PE 文件整体熵高达 7.996（接近理论上限），且按偏移顺序的前 20 条字符串全是 \"-R'J'h\"、\"FdLi|X*\"、\"*t\\\"V3!\" 这类无意义随机字节，完全没有可读的导入名、版本信息或通用程序字符串，符合加密/加壳载荷特征。"
+  },
+  {
+   "name": "8d8491cb71fb375f6509a6521c09f685368530ba2eed68abc8cab2f45828a65e.exe",
+   "score": 72,
+   "bucket": 275,
+   "reason": "文件大小686668字节但各节raw合计仅约49KB，整体熵7.965，且导入VirtualAlloc/VirtualProtect/GetProcAddress/CreateProcessA，疑似携带加密载荷并动态执行。"
+  },
+  {
+   "name": "d3dcb6b7c05940a0507e5ec8138a44a03c76bf2da34c757cb207c6eb4ab22b9b.exe",
+   "score": 72,
+   "bucket": 125,
+   "reason": "导入表同时出现 FindFirstFileW 枚举文件与 BCryptEncrypt/CryptAcquireContextW 加密 API，字符串含 Software\\Microsoft\\Windows NT\\CurrentVersion\\EFS\\CurrentKeys、CertificateHash、%s.PFX/%s.CER，构成枚举文件+EFS密钥/证书+加密的可疑落地链，且无版本资源信息、文件名为哈希。"
+  },
+  {
+   "name": "cb1454687b08797f9cd506fde40157d5688c4494772f0836054bf75f5a2bb468.exe",
+   "score": 68,
+   "bucket": 125,
+   "reason": "导入表同时含 CryptUnprotectData（DPAPI 凭据解密）与 OpenProcess/CreateThread/DeleteFileW，组合符合窃密/进程操作类载荷，且无版本资源、字符串多为编译器碎片，但缺少明确 C2 或落地执行串。"
+  },
+  {
+   "name": "0f4ecc7f67b6d098ba1dae6e2b9700caeb7a736054e6de1286835023d328decb.ole",
+   "score": 65,
+   "bucket": 125,
+   "reason": "整体熵高达 7.973 且以 .ole 容器内嵌 [Content_Types].xml、ppt/slides/_rels/*.rels 等 OOXML 路径，并交织大量短随机字符串，符合嵌入 OLE 对象藏匿/加密载荷（如 PPT 诱饵 + 混淆负载）的特征。"
+  },
+  {
+   "name": "5e405415dc1a7d3c56e7e8d8b9b744ac3c2a275ee5f4b09bc09d63d6f7546e28.exe",
+   "score": 62,
+   "bucket": 125,
+   "reason": "导入表中出现 libgimp/libgtk 等 GIMP 库并调用 GetProcAddress+VirtualProtect 动态解析内存权限，而 .text 熵 5.96 且字符串多为不可读代码片段（如 \"8MZtxH\"、\"AUATUWVSH\"、\"[^_]A\\A]A]\"），指向代码混淆或伪装加载器。"
+  },
+  {
+   "name": "86f32f026eb0dd6a4d547179e5c0cb326c8c259bd791012e54a6f98455799887.exe",
+   "score": 62,
+   "bucket": 125,
+   "reason": ".text 熵 6.43 且前 20 条字符串均为乱码/非正常文本，同时导入表含 GetProcAddress、LoadLibraryA、IsDebuggerPresent、OpenProcess、RegSetValueExW、VirtualAlloc 等动态解析、反调试、进程与注册表操作组合。"
+  },
+  {
+   "name": "0cc6ad38534c09c71a7f9366d9561d48aef9616a643466707969714c7595fd57.ole",
+   "score": 60,
+   "bucket": 125,
+   "reason": "该 .ole 整体熵高达 7.723，字符串里同时出现 [Content_Types].xml、word/document.xml 等 docx 内部路径与大量如 \"8x 3_UZB\"、\"zl-1p|f.\" 的随机高熵串，像是 OLE 容器内嵌加密/混淆的 Office 文档，缺少任何正常厂商或版本资源信息。"
+  },
+  {
+   "name": "54e26855769ea12c6fc9d4d3ea5c8e8a09cc4ea3a11865adba124f6d77d48de5.exe",
+   "score": 60,
+   "bucket": 125,
+   "reason": "字符串中同时出现 SeDebugPrivilege、Kerberos、logonid、claims、groups、PARSER2，并导入 authz.dll/sspicli.dll/netutils.dll，指向令牌特权与 Kerberos 凭据/组信息枚举类工具（whoami/令牌 dump 特征），属双用途可疑；但摘要中未见下载/注入/持久化链条，故未达强可疑档。"
+  },
+  {
+   "name": "64354378404d42f492613b144a6d0b3418261f27a380a8a4387424fe0e3ffbc1.exe",
+   "score": 60,
+   "bucket": 125,
+   "reason": "导入表同时含 wininet 的 InternetOpenUrlW/HttpSendRequestW、CreateProcessW、DeleteFileA/MoveFileExW 和 OpenSCManagerW，具备网络下载、落地执行与文件/服务操作组合，指向可疑。"
+  },
+  {
+   "name": "7f55070a0cc197156894cc6fd3ea883025550b99f8c6df77a1d26f06f82a0ee7.ole",
+   "score": 60,
+   "bucket": 125,
+   "reason": "内容为 ppt/slides 等 OOXML 路径却以 .ole 命名，且整体熵高达 7.924 并夹杂 \"&IZlW\"、\")!c'{4\" 等无意义二进制串，符合加密/混淆载荷特征，但摘要中未见下载、宏执行或 C2 等明确恶意行为串。"
+  },
+  {
+   "name": "147192b01741bc0862d13b7d9c47345d04962e9b26a9abb5a606256131f85a0d.exe",
+   "score": 58,
+   "bucket": 125,
+   "reason": "导入表同时含 php5ts.dll（内嵌 PHP 运行时）与 ws2_32 的 socket/recv/send，并调用 IsDebuggerPresent 反调试，字符串出现 \"_SERVER\"/\"interactive\"，符合把 PHP 脚本打包成 EXE 的网络后门/远控特征，但缺少明确的 C2 或落地行为证据。"
+  },
+  {
+   "name": "20a80b9d290223a304c752287ea4ac7371f928c4455fcb29bf5224f1096f8530.exe",
+   "score": 58,
+   "bucket": 125,
+   "reason": "导入表含 Windows 上罕见的 Unix 库 libdbus-1-3.dll，且调用 VirtualProtect 修改内存权限，字符串多为节区名和机器码样片段、无正常厂商版本信息资源，整体指向可疑加载器但摘要中无直接 C2 或勒索证据。"
+  },
+  {
+   "name": "2959c295d8505b6e8bdbc2fc82d998ddf32d3613c1a50cc3dfb2f43b2f440717.exe",
+   "score": 58,
+   "bucket": 225,
+   "reason": ""
+  },
+  {
+   "name": "33d869a74dbd68243d75d97c92ce1b3052117c729b81e79098e7c5b0ba4881f8.ole",
+   "score": 58,
+   "bucket": 125,
+   "reason": "文件熵高达7.615，且OLE容器中夹杂[Content_Types].xml、word/document.xml等OOXML结构的同时出现大量如\"{6Ges,\"、\"k+h>wg\"的无意义随机字节串，提示文档内容被加密或混淆打包。"
+  },
+  {
+   "name": "341e757fe21e236ff2162c678f940558196ae1988a5f5efc4a4b25e425fa0ea0.exe",
+   "score": 58,
+   "bucket": 125,
+   "reason": ".rdata 99KB 熵高达 7.17 且布局无 .rsrc 资源节，配合 libcurl/ws2_32 网络导入与 GetVolumeInformationW、VirtualProtect 组合，呈现疑似下载/解密加载器特征，但摘要中未见明确 C2 或落地执行链。"
+  },
+  {
+   "name": "3846f2ce94d43e9ef6c08cd0abfb5c6c6c993b00d8690bbea40cc525b44cc0a3.exe",
+   "score": 58,
+   "bucket": 125,
+   "reason": "前20条字符串全为乱码式高熵片段（如 \"cBcpc-c^c\"、\"e%e0eQeQeQeFeQe;eU\"），无任何可读路径、API名或版本资源信息，配合 6.697 的较高整体熵，指向加壳/加密载荷。"
+  },
+  {
+   "name": "558a14d8e2ff665755afc5f80b4830b08f956e2eb01daa8568a9f9c714f3671c.exe",
+   "score": 58,
+   "bucket": 125,
+   "reason": "导入表含 OpenSCManagerW、CryptAcquireContextW、CopyFileW/MoveFileExW、IsDebuggerPresent 等服务操作/加密/文件替换/反调试 API，且字符串区出现 jEhXZC、u7QQRj 等非常规片段，组合指向可疑投放或安装行为，但摘要中无明确 C2 或勒索证据。"
+  },
+  {
+   "name": "76098cc2969c4a090fba5c863bb3bb52b5ce88bee46da9d46aab0252affa0744.exe",
+   "score": 58,
+   "bucket": 125,
+   "reason": "16KB 的 PE64 依赖非常规的 libzmq.dll（ZeroMQ）且导入 VirtualProtect，字符串区多为 \"AUATUWVSH\"、\"[^_]A\\A]\" 这类非文本乱码，无明显厂商/版本信息，指向可疑的 C2 通信或内存改写程序。"
+  },
+  {
+   "name": "98361245c72daba37699a95ef5b60e43ce8e580da45f04969dc2b9d30e7a92bc.ole",
+   "score": 58,
+   "bucket": 125,
+   "reason": "扩展名为 .ole 但字符串出现 [Content_Types].xml、xl/workbook.xml、xl/worksheets/sheet4.xml 等 OOXML 结构，且整体熵 7.96 并夹杂大量随机字符串，指向加密或混淆的文档载荷。"
+  },
+  {
+   "name": "a500ec91119693013b74f72f3b082eb704417e57b6f26883f488dea2b8f081cb.exe",
+   "score": 58,
+   "bucket": 125,
+   "reason": "33KB 小体积 PE 同时导入 ws2_32.dll 网络 API 与 odbc32.dll 数据库 API，并点名 VirtualProtect，配合哈希式文件名与大量形如 \"AWAVAUATUWVSH\"、\"[^_]A\\A]A^A_\" 的代码片段字符串（疑似解码/自解压载荷残留），符合下载器/加载器特征。"
+  },
+  {
+   "name": "d32a5abea7c5d5f3e1aa9632d3b49cfa2a81169badcbfb12470c6f2aedb91f09.exe",
+   "score": 58,
+   "bucket": 125,
+   "reason": "导入表含 libgimp/GTK 等非常规 DLL 且 .idata 可写，字符串出现 '8MZtxH'、'AUATUWVSH' 等无意义片段，并导入 VirtualProtect/GetProcAddress，综合可疑。"
+  },
+  {
+   "name": "729d140140c3af5b46031f1a7652b159b08721afa80776f17afe73633800afc1.exe",
+   "score": 55,
+   "bucket": 125,
+   "reason": ".text 段熵 6.47 且前 20 条字符串几乎全是 KSw$KV、uTVWh7a@、HHt$HHt 这类无意义乱码，同时导入表含 IsDebuggerPresent 反调试、GetProcAddress/LoadLibraryW 动态解析与 CreateProcessW 进程创建，多项特征共同指向可疑。"
+  },
+  {
+   "name": "82599dba34b4cf08f41cd37b88e261f7480aebd9075fc41e2fbbae81ca3b4b9a.ole",
+   "score": 55,
+   "bucket": 125,
+   "reason": "扩展名为 .ole 但内部字符串全是 [Content_Types].xml、xl/workbook.xml、xl/worksheets/sheet1.xml 等 OOXML(xlsx) 结构，整体熵高达 7.219，且夹杂 X9MMlY、q2,Ju2,Ju2… 等大量乱码串，属于容器类型不符 + 高熵载荷特征，需进一步确认是否为带宏/嵌入对象的恶意表格。"
+  },
+  {
+   "name": "6bc1eff62faa5b54d178f25b0d5e4942ae310aa92feee3d2d99a8001b04e57db.exe",
+   "score": 52,
+   "bucket": 275,
+   "reason": "导入仅 kernel32/user32 却集中出现 DeleteFileA/W、FindFirstFileA、GetProcAddress、VirtualAlloc 等删除、遍历与动态解析 API，且字符串多为乱码与 typeinfo 残留、CODE 段熵 6.54，符合文件删除/载荷释放类可疑行为但无明确 C2 或恶意串。"
+  },
+  {
+   "name": "b5703fd17c3ae58ef1f0efb174c8d6f7421c1b6976d1d963327e57675b95a28c.exe",
+   "score": 52,
+   "bucket": 125,
+   "reason": "文件名是纯哈希且无版本信息，导入表仅 3 个 DLL 却含 tier0.dll/vstdlib.dll（Source 引擎模块）+ GetProcAddress/LoadLibraryExW 动态解析与 IsDebuggerPresent 反调试，.text 熵 6.34 偏高、字符串多为代码字节，符合游戏作弊/注入型加载器特征。"
+  },
+  {
+   "name": "e0e61d43bb747cbf2c318f32f0e405abf96ca648afedc0c697bf9af9c5d62ad1.ole",
+   "score": 50,
+   "bucket": 125,
+   "reason": "整体熵高达7.816，且.ole扩展名内出现[Content_Types].xml、word/document.xml等OOXML结构及大量高熵随机字符串，符合压缩/加密载荷特征，但摘要中未见明确宏或C2字符串。"
+  },
+  {
+   "name": "e29835e30a82311d856dc8ac8ba70b5f10f9cd6465a76a0f6423ed1b36dad744.exe",
+   "score": 50,
+   "bucket": 125,
+   "reason": "导入表同时含 WinINet 下载链（InternetOpenW/HttpSendRequestW/InternetReadFile）、CryptAcquireContextW 与 IsDebuggerPresent，并配合 LoadLibraryW/GetProcAddress 动态解析，具备下载器/反调试特征，但未见明确 C2 字符串或恶意载荷证据。"
+  }
+ ],
+ "rule_scores_in_gray": {
+  "0111bddac92a792c7b2ee3ab77642c33df0e01afe737b0d1fa0cbbf331d9572c.exe": 125,
+  "0222aaf048e5bc28f88d03862f133bc444d358f06201e00dcc93422c81e5bcca.exe": 125,
+  "028bbab37adb09e219c65441bb2fe342d1bae785a3e0a11d5284ed44588fcf86.ole": 125,
+  "029278b8f482f6bea5a20a04bdf2d089d954eaf61e91242e623ef53aa45801ff.exe": 275,
+  "031f7fed1bac11ee81db1494883badc191549dc66d63849ae129f5f83f64e089.exe": 275,
+  "06a428dd5a543e67f25b02ccd7efa77d8f2cd7fe67bbfe2184d2023b16aa152c.exe": 125,
+  "0757acc2fa68b90fbd889e673bfe5f619b8f8f92a1fa28888fac9a3dba5f3708.exe": 125,
+  "077a5c96cfd8644425f870444b604bfe3aa62587073fd85a4dc75244775b99ab.exe": 125,
+  "0a266ad12d079323f2170811f5195fb51893d5bcbc915e758dc10c0f876d5fb5.exe": 275,
+  "0ad234bb3f6d830cfdb896b8f45b59b8790e72fd3b834242ab1a35a0a7eb21a0.ole": 125,
+  "0ae67dd54368c64d392733680f1cee1864a6a87469137f7c5ea04a216a823ca4.exe": 225,
+  "0bf9cfc88d56b52982655b56d577f69d2ee4b136908684015001c52c64f0a84b.exe": 125,
+  "0c8af4bbf3e29c4ab7dd8372725a931985b669d15b82615ab05838ed348bf558.exe": 125,
+  "0cc6ad38534c09c71a7f9366d9561d48aef9616a643466707969714c7595fd57.ole": 125,
+  "0d872458d3769d89f034a865b13b4ecddfb4abb4e59c56dcaf53342884bb10a8.exe": 125,
+  "0eddc7ab734587c32dbc9cbd68f2a2efd6acade721bad6f641378c56351ed80d.exe": 125,
+  "0f4ecc7f67b6d098ba1dae6e2b9700caeb7a736054e6de1286835023d328decb.ole": 125,
+  "0fee54da832c59eeebc1145b86b07bbc8a6a6d6d6f439e638d2c379e73b59f59.exe": 275,
+  "10ddc91db7463138fee1d01c97d4b540168557dad58e2dfee8cb1393497bde3a.exe": 125,
+  "113e1abc1313d617f2c20112a9b8e94a04ed8ed26383ec67391bfad9e959d9ae.exe": 225,
+  "117b745bbd6ccc5cc6b2c0d1c004daa02a31c1ad9156c19afbdbd308d7c3c44f.ole": 125,
+  "11fbeda18f46a7938efdd1de777f14d8f697742ddf7ac3880a052f559cdc50b3.exe": 275,
+  "121e7f531ee89f859421f5a8fd3295536da20cbbe3d45954a09bad9029d51054.exe": 275,
+  "12583e6a823028d30f25a31bf950a22281e8fe0e751df565bdb82545ba787533.exe": 125,
+  "147192b01741bc0862d13b7d9c47345d04962e9b26a9abb5a606256131f85a0d.exe": 125,
+  "14e64436677fdd74a0e1923f7b2a10d191620e16f1fa6069805ab034b8ff09df.exe": 125,
+  "15dbf11a6447c9e092dbe4e40bcd11a323d5e3971ebf77e009ddcb2750b1419e.exe": 125,
+  "16c7705fef203b88ae0976ed64bac335ad86b376860f826b3eb61f52e9ff692d.exe": 275,
+  "17e977e2f4d8f9a3de8e01eaa1c82ccca63789cacc135859f665046a4a990dc8.exe": 125,
+  "18ef1715677de1aee41945784481cbcaa16c4e99753340b8844d2f9ad4c60b36.exe": 125,
+  "1b399f61e57266427a5fceb4f3df6a337304832e24579c43385b59cfd660e068.exe": 125,
+  "1d2d450742e4ed4fb8486fd7e3892828dd97bbf63f0e23b0975725bdc18ce766.exe": 125,
+  "1e171264f1310680b03bb9122633db660378bc411b28ae25c2bfab9f0f06da51.exe": 125,
+  "20a80b9d290223a304c752287ea4ac7371f928c4455fcb29bf5224f1096f8530.exe": 125,
+  "23e307174ac5c0ecf419b1a727ad499e1d939a8d2142d1245b7a61e70242ec6e.exe": 125,
+  "2496c9a90fd7e90d39a9cea02b27e91a3ecf09a39a6f0887463b4addf29496b1.ole": 125,
+  "256125aa18a03ce9dd77811091d8e16a6a0f6dba3d3efe285f1242c8c2240769.exe": 125,
+  "282734e89b24d4ff6cee7776cdbf6b6f140505354708c491806a86873cb69767.ole": 125,
+  "282f6f7fb0c5b0de73b72301646791901ae28c8c69cc25cf47b2ff773cb5dc20.exe": 125,
+  "2959c295d8505b6e8bdbc2fc82d998ddf32d3613c1a50cc3dfb2f43b2f440717.exe": 225,
+  "2999b0709f50ed5026039496142254af172990a50e2a6e1d327b7cb94b072f7c.exe": 125,
+  "2acf8f6f068976f75dd70e6195f8a94c3e623a0137c99d78f9055a5dbbbf75bf.exe": 125,
+  "2edf7c8fd59cd5fcd19fa528f60cbd6ddb9a8076ae0280b11d8ea8eaf7d39958.exe": 125,
+  "3088b3479bf282bffbb9929a6acc9f61fe993f7ad51cfb2917205d2dbfa1fbc9.exe": 125,
+  "33a5b015af1ecd057057eada64b2f8fe3633b467bd43454f5278f76b94cd09ab.exe": 125,
+  "33d869a74dbd68243d75d97c92ce1b3052117c729b81e79098e7c5b0ba4881f8.ole": 125,
+  "341e757fe21e236ff2162c678f940558196ae1988a5f5efc4a4b25e425fa0ea0.exe": 125,
+  "343564ae7b089278180f139230e02a587598bbc10ceb2ace00268c63127a792d.exe": 125,
+  "34e718e7c5644f147bec3af69f9fa789be1220e56a7bf827bf1c11afc9c3b0d0.exe": 125,
+  "3686c09b2a7755811095196bd155757b5316883d27266ca2d808ba38b410163a.exe": 125,
+  "377c0e34938c5c87ce613c5f2ea64c702baa55d2368c20ab375ecc8b605d0a76.exe": 125,
+  "3846f2ce94d43e9ef6c08cd0abfb5c6c6c993b00d8690bbea40cc525b44cc0a3.exe": 125,
+  "3cccf40d984007ee8b64fdb0216efa50e850306531dd3f4ac7710a6dc155351b.exe": 125,
+  "41fc284f5c860580dd5fa32de705b66be97cb01c77c9d0aea3acbe38a5f8aa96.exe": 125,
+  "424451b348b3596f08e28772ee3afb3f16676687f6192746f132394c25112814.exe": 125,
+  "4254345e5fa80fec2542e57e3134be06334d50f9fb8cbacba54f560f386da9bf.ole": 125,
+  "42f9e10113f04d60ab45760862f8c371e9d1a3f5f6f3d9457ed5d1f299bc0a38.exe": 125,
+  "42fd07c963c0e20be60de897497fb7783eb25f09480d9a03ea3d462182b08a74.exe": 125,
+  "432f3499c38a069b0eccc1f19b11d13760da2dd6fba517f215e5dd03285f9b5a.exe": 125,
+  "44b6a440aa28893b3a9d20a9d3b729a3da38e27934db839b7b427331f814319d.exe": 125,
+  "46c629e4918166b75671f1fa6a6f467bd1948abbf0e9e4ea30f5d0e5fdfd84f4.exe": 125,
+  "4c33d7c85ae6b19144edea55df4663fb476aaf102d86d812e624f22ae9c81213.exe": 125,
+  "4c5a4bfbd6de5221c044b95c96fabc094fd854508471f9d7cb3890853ea318c3.exe": 125,
+  "4e526c15684a2c7e327d1a5e54d0fc3d227bd6fd790cc5f495111a09c0bf74de.exe": 125,
+  "51ee81dbc0add93b11aa0d4ad02308243c1c194b4bed94722cb18bcf8f2836cf.exe": 125,
+  "52def964142be6891054d2f95256a3b05d66887964fcd66b34abfe32477e8965.exe": 125,
+  "54e26855769ea12c6fc9d4d3ea5c8e8a09cc4ea3a11865adba124f6d77d48de5.exe": 125,
+  "558a14d8e2ff665755afc5f80b4830b08f956e2eb01daa8568a9f9c714f3671c.exe": 125,
+  "57d78efac696eff08c83318b96870640b6e36baaa3bad6144467df73fea872ac.exe": 125,
+  "59d1674d83fe80a3c9a467f56ae5b1d106678a307c894dc57f8e98d7ed69358f.exe": 125,
+  "5a071e20a23c845332e288fe02f2601518c8f1c1de1871d24a0530b09841157f.exe": 125,
+  "5a0f4fa2c578675590ac317e392f78abfc19577a7f8c964e708a1ad436e58a37.exe": 125,
+  "5a63c01f80e137c588117dec2a9ae121d27b8a57ec40ab77e7e5a94a75be2db2.exe": 125,
+  "5b231372f1e52b49526215deebcfc997b9dd74d77cc35d9cf78590480e51b1a0.exe": 125,
+  "5e405415dc1a7d3c56e7e8d8b9b744ac3c2a275ee5f4b09bc09d63d6f7546e28.exe": 125,
+  "5e83b73dc8eb0cf1ec380e703432609137fb07779a662a32c8f9c85087780a4a.exe": 125,
+  "5ede50d16c17c209d3c3da477095cfe3d21ecc4d22720c2f8c98540b41bcb2f6.exe": 275,
+  "639dfb6bb9a11a0b1ad03c560235d9c36cebb009aa2518e63f0a374c8de731eb.exe": 125,
+  "64354378404d42f492613b144a6d0b3418261f27a380a8a4387424fe0e3ffbc1.exe": 125,
+  "65445303675931b6ccc3090176e6196f25bced4236b479c2753500878cd41ac7.exe": 125,
+  "66031dcf8d27466f6407c1ad670e95947914b02778831f637172244b83eaa296.exe": 125,
+  "68d7f06712dc622880acf9c37f9d08e3c72d48c0016ca1f69f1f386df5f234cf.exe": 125,
+  "69df4166f03247f9694d0300db13485c0c6e4a4cf1b6968118fb4f0f9cf846dd.exe": 275,
+  "6aa04e0e76bfc243beee6d843fddc6689dfdada630dd08ccfc1863db3d8e3540.exe": 125,
+  "6bc1eff62faa5b54d178f25b0d5e4942ae310aa92feee3d2d99a8001b04e57db.exe": 275,
+  "729d140140c3af5b46031f1a7652b159b08721afa80776f17afe73633800afc1.exe": 125,
+  "755c00b1e667605746edc0eb826412dca4f317fd290728b5c71e6a7c12f537ed.ole": 125,
+  "76098cc2969c4a090fba5c863bb3bb52b5ce88bee46da9d46aab0252affa0744.exe": 125,
+  "7bede57bc7d5e493a892bf339f23bbcd24c87eb460de7343b6cd068fcba9e3c3.exe": 125,
+  "7eef714fc5db03b3f45f8e2226e4c3876864f2baa13ca1730324147ca6957c96.exe": 125,
+  "7f55070a0cc197156894cc6fd3ea883025550b99f8c6df77a1d26f06f82a0ee7.ole": 125,
+  "80730d31243d7a31e7f6796aae2ad2168ab8201ad4800f632abc0239b35d04fe.ole": 125,
+  "808004d8cffa5ce5c2f28f029f8dac627b87b73b8de99e7cdd734094fa2bc584.exe": 125,
+  "82599dba34b4cf08f41cd37b88e261f7480aebd9075fc41e2fbbae81ca3b4b9a.ole": 125,
+  "8298cafe8d696c08acb1d7d2b1171c9f7fed918bc92037b6e31e37082fc26c3d.ole": 125,
+  "85da776d71387fc7d0db12a3709c4cf8cca0e937cad33398b9d47448154eb92f.exe": 125,
+  "86f32f026eb0dd6a4d547179e5c0cb326c8c259bd791012e54a6f98455799887.exe": 125,
+  "894e167a815606bb9bd43a62314f58afa84396be4b86988545c32e39e8f57c01.ole": 125,
+  "8a003a2f25c4d464c9123cae4467afd4b50cc05287b370c53494c472bfbc8b48.exe": 125,
+  "8aaf7e97960e9bc08487682382b2dc6b3b290b0d120855353b893e453cdc4326.exe": 125,
+  "8b8716f706607fc8f3012e6ec850a4c5dbe985be0f572d7279cf89466c756c59.ole": 125,
+  "8c953a78a471f5ed443a422f015d19ae58ad382a4383825b3c375e861cf25c33.exe": 125,
+  "8d8491cb71fb375f6509a6521c09f685368530ba2eed68abc8cab2f45828a65e.exe": 275,
+  "8fe31269d1acd87ef39cde0b6f82a8a5088bb526eb3e43e1adfde86392901490.exe": 125,
+  "958d50d5468cfa8909c5bef2476f88eb82bd112a6139c631601ff50cd77665b6.exe": 125,
+  "959cf7ad86d1d9a697ff2161ea26f4825ab4d369b4651d3a3ad0e81e8416a2eb.exe": 125,
+  "96e1776c94c1177014f4c46d151e179607a130b217dac3a03a38e5d257f5ccca.exe": 125,
+  "97b3a8f65ae3a3b6d8702923f3be4167626d0fdd249895adcaccc68ad370b735.exe": 125,
+  "98361245c72daba37699a95ef5b60e43ce8e580da45f04969dc2b9d30e7a92bc.ole": 125,
+  "98ba00e70a005017c3665741803e8b36938fc9efb0c4821c675f2c100936c5eb.exe": 125,
+  "9918b2f820a89c49c64edb1fd322ec96d1d60d3e9b31b1cdcc7340250ea05cdb.exe": 125,
+  "9c9ab16f3a94bde179d66cb45b1f50af58ec4b849ce103dafea33f5aef4d888c.exe": 125,
+  "9dd0b4db6deee989440abfeddb4280a0a55137479b15af616f506ebf3bd891fb.exe": 125,
+  "9ec37fbce45723838d736491fcb93fa90345062ea00d8d7bcc04700f03ebc699.ole": 125,
+  "a27af7578372fc280b0486ddd9e2fb493e2adcd7d77caee7b160090d82e8096a.ole": 125,
+  "a500ec91119693013b74f72f3b082eb704417e57b6f26883f488dea2b8f081cb.exe": 125,
+  "a5d76d29280af398aeb406063676620060a5d0cb28b2d33d917f41a5c06e4d84.exe": 125,
+  "a8a23d61a64999e27bf093a7c8dff04293e1b3f56d9eb55dbd82956ae12a8a41.exe": 125,
+  "a952f28b9281645b82f71eedf00a68dd629d7a679bef62d33758528306c4593a.ole": 125,
+  "ab9c143dc118ee29f52cf9ae5f2277751ca29b5e7d9da96b33584ef56b450ce7.exe": 125,
+  "ab9d8a305bac15d5bb3701274daba75b4ed6f73274da9b824d0ed89bcd8e3779.ole": 125,
+  "abbf94526e78224768f7d4e4651b416f1619193792725e24cbe9ed08bd97c64b.exe": 125,
+  "abc8861cd68131b3f5a9bb73c748946e119e08f7d997df9557a8c9fc0a09b588.exe": 125,
+  "ae301ae526ffaa5f1db25268221ace5d9444df50b30171f367f67f64e3fd4fa2.exe": 125,
+  "af689ff48617cddca4a3881ef6fe4719a422c9ab37bcc26f90556ac36ff1a3f0.exe": 125,
+  "b02c253a85455b8eed9550325ba6b8a55b745281a7d1dbec58eb49e7d126b4cb.exe": 225,
+  "b14322fa433e93a9d512829bb351f959fbf6543fc3c2eeb06d8af60cb8312dc8.exe": 125,
+  "b207f025c13b2bf433eb5e2f82bd8f6c0c6853c8317fed4ca308d185f4ccd345.exe": 125,
+  "b2ded3ce4b19a18844d4aa90b60dfc1a8d3e9cd7649e7478c524d5c9d035fccc.exe": 125,
+  "b493bf6d7085eb97d17dd6516345e65277d3a60b848f11aef283dbba759435e1.exe": 125,
+  "b5703fd17c3ae58ef1f0efb174c8d6f7421c1b6976d1d963327e57675b95a28c.exe": 125,
+  "b6e97dbf4ec13dec0324ab2d66b8c771d4da6539087d84bf009b9a80b0f78799.exe": 125,
+  "b8f322652153ca2ef212394bc7e13f10025515a956b902d0e06529aa8cfc9320.exe": 125,
+  "bfd212e78b058423da320592dd78766e41462ffa410010cce99d6c31f7c25bde.exe": 125,
+  "c0975115208399a8e9fbec2d9dee70af458b44471c8d8ac1b09c21631f9dbc4a.exe": 125,
+  "c33f8bc03d98cbde2ba8dc47fc97be4b6094a44ffcae13a46fb18f7c7d74f95f.ole": 125,
+  "c43cc2ffc9543054c2b6515a8378db1e085c2db4e9a932deb06e2af1febaf4d8.exe": 125,
+  "c5f8edfa5555688a71b70d7a32425b931d1e8f6ce44bbba3166f827146787c6d.exe": 125,
+  "c8a0eebccc746daef3270ddd170d030ddee6f9c6ac09dc6a41b4d5fb6b1aa4d6.exe": 125,
+  "ca91ab3a6c6a58e2d8042be6d5a8df9b4f7e794f24fc89d6f75b7c04ad7cc7f7.exe": 125,
+  "cb1454687b08797f9cd506fde40157d5688c4494772f0836054bf75f5a2bb468.exe": 125,
+  "cb548e26ed3c9a1550374e66b497d68f80a2e8129f098d77cabc4c25698c4347.exe": 125,
+  "ceed0a0e156641c5df0e6fbd10bbeb878223873e8e3940098bd21256e381a3c0.exe": 125,
+  "d32a5abea7c5d5f3e1aa9632d3b49cfa2a81169badcbfb12470c6f2aedb91f09.exe": 125,
+  "d3dcb6b7c05940a0507e5ec8138a44a03c76bf2da34c757cb207c6eb4ab22b9b.exe": 125,
+  "d95753ec8aa7da87cd519e3c77d16da579815cc53c564a77192f65c4a01c043d.exe": 125,
+  "dad6229600eb17c91ad9ddae5481379a6d06b08147d840e20648f8e36d56844e.exe": 125,
+  "dd7a6d34e1a7b599d76ca9a895a1fd10c7dba227dd402a8782316b8f6a53aa10.exe": 125,
+  "dec0efefe7749ab45c541f8c2c0bc4fa946e865025e209e58a0dffa41d87baf0.exe": 125,
+  "dec54fa2495ddda9647c516f4025f08f552451bdf432930df6dcffa31ee38d46.exe": 125,
+  "e0718764552ce0092f528cc521052229ccda4bf21279f90dcdfc226f45eed43a.exe": 125,
+  "e0e61d43bb747cbf2c318f32f0e405abf96ca648afedc0c697bf9af9c5d62ad1.ole": 125,
+  "e29835e30a82311d856dc8ac8ba70b5f10f9cd6465a76a0f6423ed1b36dad744.exe": 125,
+  "e40f02f83a5747b8b47cbc21fc7c54e6b81b7b92c86410ccc62795274f639385.exe": 125,
+  "e82b3e2d357ecdebc189379f79f2b354d34c7af1a1d56de51ad5a539059dcf61.exe": 125,
+  "e904e2854dc69d740d03101764ff1dcad82acd70b5b9b6076f26d0d64a68f1ce.exe": 125,
+  "e97fde1aa1260261577d81203a2a0b1b666e7774b44f42be89c84065d93e89e6.exe": 125,
+  "e9e24fb71b09913424236131a896329ed726e0a6c796735462ff6ab440d7287c.exe": 125
+ },
+ "holdouts": [
+  {
+   "path": "bench/holdout-mb280-triage.json",
+   "n": {
+    "total": 280,
+    "scored": 280,
+    "malicious": 280,
+    "benign": 0
+   },
+   "cost": {
+    "files": 280,
+    "ok": 280,
+    "failed": 0,
+    "from_cache": 0,
+    "charged_files": 280,
+    "prompt_tokens": 199554,
+    "completion_tokens": 106683,
+    "total_tokens": 306237,
+    "avg_tokens_per_file": 1093.7,
+    "avg_prompt_tokens": 712.7,
+    "estimated_entries": 0,
+    "parse_modes": {
+     "strict_json": 279,
+     "repaired_escape": 1
+    },
+    "repaired_or_fallback": 1,
+    "summary_over_budget": 0,
+    "usage_source": "provider",
+    "cny_per_million_tokens": 8.0,
+    "cost_cny": 2.4499,
+    "price_source": "project constant (budget.CNY_PER_MILLION_TOKENS) — upper bound for flash tier"
+   },
+   "verification": {
+    "model_called": true,
+    "failed_entries": 0,
+    "degraded_entries": 0,
+    "from_cache": 0,
+    "usage_source": "provider",
+    "estimated_entries": 0,
+    "parse_modes": {
+     "strict_json": 279,
+     "repaired_escape": 1
+    },
+    "repaired_or_fallback": 1,
+    "all_rows_have_score_or_error": true,
+    "verdict_batch_usable": true
+   },
+   "auc": null,
+   "sweep": [
+    {
+     "threshold": 0,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 1.0,
+     "recall_hits": 280,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 280,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 5,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 1.0,
+     "recall_hits": 280,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 280,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 10,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.9929,
+     "recall_hits": 278,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 278,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 15,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.9714,
+     "recall_hits": 272,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 272,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 20,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.9464,
+     "recall_hits": 265,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 265,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 25,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.9321,
+     "recall_hits": 261,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 261,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 30,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.9179,
+     "recall_hits": 257,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 257,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 35,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.9,
+     "recall_hits": 252,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 252,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 40,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.8786,
+     "recall_hits": 246,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 246,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 45,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.8679,
+     "recall_hits": 243,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 243,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 50,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.85,
+     "recall_hits": 238,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 238,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 55,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.8393,
+     "recall_hits": 235,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 235,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 60,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.7786,
+     "recall_hits": 218,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 218,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 65,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.7071,
+     "recall_hits": 198,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 198,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 70,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.65,
+     "recall_hits": 182,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 182,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 75,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.5821,
+     "recall_hits": 163,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 163,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 80,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.3571,
+     "recall_hits": 100,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 100,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 85,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.2643,
+     "recall_hits": 74,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 74,
+     "precision_sent": 1.0
+    },
+    {
+     "threshold": 90,
+     "malicious_total": 280,
+     "benign_total": 0,
+     "recall": 0.125,
+     "recall_hits": 35,
+     "benign_sent": 0,
+     "benign_send_rate": null,
+     "sent_total": 35,
+     "precision_sent": 1.0
+    }
+   ],
+   "at_recommended_threshold": {
+    "threshold": 60,
+    "malicious_total": 280,
+    "benign_total": 0,
+    "recall": 0.7786,
+    "recall_hits": 218,
+    "benign_sent": 0,
+    "benign_send_rate": null,
+    "sent_total": 218,
+    "precision_sent": 1.0
+   }
+  },
+  {
+   "path": "bench/holdout-benign-win280-triage.json",
+   "n": {
+    "total": 280,
+    "scored": 280,
+    "malicious": 0,
+    "benign": 280
+   },
+   "cost": {
+    "files": 280,
+    "ok": 280,
+    "failed": 0,
+    "from_cache": 0,
+    "charged_files": 280,
+    "prompt_tokens": 221640,
+    "completion_tokens": 213355,
+    "total_tokens": 579319,
+    "avg_tokens_per_file": 2069.0,
+    "avg_prompt_tokens": 791.6,
+    "estimated_entries": 0,
+    "parse_modes": {
+     "strict_json": 280
+    },
+    "repaired_or_fallback": 0,
+    "summary_over_budget": 0,
+    "usage_source": "provider",
+    "cny_per_million_tokens": 8.0,
+    "cost_cny": 4.6346,
+    "price_source": "project constant (budget.CNY_PER_MILLION_TOKENS) — upper bound for flash tier"
+   },
+   "verification": {
+    "model_called": true,
+    "failed_entries": 0,
+    "degraded_entries": 0,
+    "from_cache": 0,
+    "usage_source": "provider",
+    "estimated_entries": 0,
+    "parse_modes": {
+     "strict_json": 280
+    },
+    "repaired_or_fallback": 0,
+    "all_rows_have_score_or_error": true,
+    "verdict_batch_usable": true
+   },
+   "auc": null,
+   "sweep": [
+    {
+     "threshold": 0,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 280,
+     "benign_send_rate": 1.0,
+     "sent_total": 280,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 5,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 276,
+     "benign_send_rate": 0.9857,
+     "sent_total": 276,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 10,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 202,
+     "benign_send_rate": 0.7214,
+     "sent_total": 202,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 15,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 154,
+     "benign_send_rate": 0.55,
+     "sent_total": 154,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 20,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 116,
+     "benign_send_rate": 0.4143,
+     "sent_total": 116,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 25,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 110,
+     "benign_send_rate": 0.3929,
+     "sent_total": 110,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 30,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 94,
+     "benign_send_rate": 0.3357,
+     "sent_total": 94,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 35,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 78,
+     "benign_send_rate": 0.2786,
+     "sent_total": 78,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 40,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 58,
+     "benign_send_rate": 0.2071,
+     "sent_total": 58,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 45,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 54,
+     "benign_send_rate": 0.1929,
+     "sent_total": 54,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 50,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 42,
+     "benign_send_rate": 0.15,
+     "sent_total": 42,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 55,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 36,
+     "benign_send_rate": 0.1286,
+     "sent_total": 36,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 60,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 22,
+     "benign_send_rate": 0.0786,
+     "sent_total": 22,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 65,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 15,
+     "benign_send_rate": 0.0536,
+     "sent_total": 15,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 70,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 11,
+     "benign_send_rate": 0.0393,
+     "sent_total": 11,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 75,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 6,
+     "benign_send_rate": 0.0214,
+     "sent_total": 6,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 80,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 3,
+     "benign_send_rate": 0.0107,
+     "sent_total": 3,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 85,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 2,
+     "benign_send_rate": 0.0071,
+     "sent_total": 2,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 90,
+     "malicious_total": 0,
+     "benign_total": 280,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 0,
+     "benign_send_rate": 0.0,
+     "sent_total": 0,
+     "precision_sent": null
+    }
+   ],
+   "at_recommended_threshold": {
+    "threshold": 60,
+    "malicious_total": 0,
+    "benign_total": 280,
+    "recall": null,
+    "recall_hits": 0,
+    "benign_sent": 22,
+    "benign_send_rate": 0.0786,
+    "sent_total": 22,
+    "precision_sent": 0.0
+   }
+  },
+  {
+   "path": "bench/holdout-benign-wheel120-triage.json",
+   "n": {
+    "total": 120,
+    "scored": 120,
+    "malicious": 0,
+    "benign": 120
+   },
+   "cost": {
+    "files": 120,
+    "ok": 120,
+    "failed": 0,
+    "from_cache": 0,
+    "charged_files": 120,
+    "prompt_tokens": 94415,
+    "completion_tokens": 35902,
+    "total_tokens": 135971,
+    "avg_tokens_per_file": 1133.1,
+    "avg_prompt_tokens": 786.8,
+    "estimated_entries": 0,
+    "parse_modes": {
+     "strict_json": 120
+    },
+    "repaired_or_fallback": 0,
+    "summary_over_budget": 0,
+    "usage_source": "provider",
+    "cny_per_million_tokens": 8.0,
+    "cost_cny": 1.0878,
+    "price_source": "project constant (budget.CNY_PER_MILLION_TOKENS) — upper bound for flash tier"
+   },
+   "verification": {
+    "model_called": true,
+    "failed_entries": 0,
+    "degraded_entries": 0,
+    "from_cache": 0,
+    "usage_source": "provider",
+    "estimated_entries": 0,
+    "parse_modes": {
+     "strict_json": 120
+    },
+    "repaired_or_fallback": 0,
+    "all_rows_have_score_or_error": true,
+    "verdict_batch_usable": true
+   },
+   "auc": null,
+   "sweep": [
+    {
+     "threshold": 0,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 120,
+     "benign_send_rate": 1.0,
+     "sent_total": 120,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 5,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 117,
+     "benign_send_rate": 0.975,
+     "sent_total": 117,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 10,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 35,
+     "benign_send_rate": 0.2917,
+     "sent_total": 35,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 15,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 18,
+     "benign_send_rate": 0.15,
+     "sent_total": 18,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 20,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 5,
+     "benign_send_rate": 0.0417,
+     "sent_total": 5,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 25,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 3,
+     "benign_send_rate": 0.025,
+     "sent_total": 3,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 30,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 3,
+     "benign_send_rate": 0.025,
+     "sent_total": 3,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 35,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 2,
+     "benign_send_rate": 0.0167,
+     "sent_total": 2,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 40,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 2,
+     "benign_send_rate": 0.0167,
+     "sent_total": 2,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 45,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 2,
+     "benign_send_rate": 0.0167,
+     "sent_total": 2,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 50,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 1,
+     "benign_send_rate": 0.0083,
+     "sent_total": 1,
+     "precision_sent": 0.0
+    },
+    {
+     "threshold": 55,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 0,
+     "benign_send_rate": 0.0,
+     "sent_total": 0,
+     "precision_sent": null
+    },
+    {
+     "threshold": 60,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 0,
+     "benign_send_rate": 0.0,
+     "sent_total": 0,
+     "precision_sent": null
+    },
+    {
+     "threshold": 65,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 0,
+     "benign_send_rate": 0.0,
+     "sent_total": 0,
+     "precision_sent": null
+    },
+    {
+     "threshold": 70,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 0,
+     "benign_send_rate": 0.0,
+     "sent_total": 0,
+     "precision_sent": null
+    },
+    {
+     "threshold": 75,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 0,
+     "benign_send_rate": 0.0,
+     "sent_total": 0,
+     "precision_sent": null
+    },
+    {
+     "threshold": 80,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 0,
+     "benign_send_rate": 0.0,
+     "sent_total": 0,
+     "precision_sent": null
+    },
+    {
+     "threshold": 85,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 0,
+     "benign_send_rate": 0.0,
+     "sent_total": 0,
+     "precision_sent": null
+    },
+    {
+     "threshold": 90,
+     "malicious_total": 0,
+     "benign_total": 120,
+     "recall": null,
+     "recall_hits": 0,
+     "benign_sent": 0,
+     "benign_send_rate": 0.0,
+     "sent_total": 0,
+     "precision_sent": null
+    }
+   ],
+   "at_recommended_threshold": {
+    "threshold": 60,
+    "malicious_total": 0,
+    "benign_total": 120,
+    "recall": null,
+    "recall_hits": 0,
+    "benign_sent": 0,
+    "benign_send_rate": 0.0,
+    "sent_total": 0,
+    "precision_sent": null
+   }
+  }
+ ]
+}
