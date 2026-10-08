@@ -5,7 +5,7 @@
   <div class="meta">
     文件：<span class="rowfile">{{ job.file }}</span> ｜ 任务：<code>{{ job.job_id }}</code>
     ｜ 状态：{{ job.status }}
-    ｜ 结论档位：{% if job.ai %}AI 档（含模型断言）{% else %}确定性判定（规则档，未调用模型）{% endif %}
+    ｜ 结论档位：{% if job.ai and job.ai_ready %}AI 档（含模型断言）{% elif job.ai %}请求了 AI 档但未生效（{{ job.ai_reason }}）→ 确定性判定（规则档）{% else %}确定性判定（规则档，未调用模型）{% endif %}
   </div>
   {% if job.status == 'error' %}
     <p class="error">扫描出错：{{ job.error }}</p>

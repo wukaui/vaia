@@ -57,6 +57,8 @@
     log.hidden = true;
   });
 
+  loadSettings();
+
   go.addEventListener('click', async () => {
     if (!chosen) return;
     if (timer) { clearInterval(timer); timer = null; }
@@ -109,6 +111,104 @@
     poll(data.job_id);
   });
 
+  // ---------------- 扫描参数（服务端 web-settings.json） ----------------
+  const FIELDS = ['ai', 'triage', 'ai_threshold', 'ai_threshold_low',
+                  'triage_threshold', 'triage_entry_gate',
+                  'deep_evidence_threshold', 'token_budget'];
+  const saveState = document.getElementById('save-state');
+
+  function readSettings() {
+    const out = {};
+    FIELDS.forEach(k => {
+      const el = document.getElementById('p-' + k);
+      if (!el) return;
+      if (el.type === 'checkbox') { out[k] = el.checked; return; }
+      const v = parseInt(el.value, 10);
+      out[k] = Number.isNaN(v) ? 0 : v;
+    });
+    return out;
+  }
+
+  function writeSettings(params) {
+    FIELDS.forEach(k => {
+      const el = document.getElementById('p-' + k);
+      if (!el || params[k] === undefined || params[k] === null) return;
+      if (el.type === 'checkbox') el.checked = !!params[k];
+      else el.value = params[k];
+    });
+  }
+
+  async function loadSettings() {
+    try {
+      const r = await fetch('/api/settings');
+      if (r.ok) writeSettings((await r.json()).params || {});
+    } catch (err) { /* 加载失败就用服务端渲染的初值 */ }
+  }
+
+  const saveBtn = document.getElementById('save');
+  if (saveBtn) {
+    saveBtn.addEventListener('click', async () => {
+      saveState.textContent = '保存中…';
+      try {
+        const r = await fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(readSettings()),
+        });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        writeSettings(d.params);
+        saveState.textContent = '已保存（对新任务生效）：' +
+          FIELDS.map(k => k + '=' + d.params[k]).join(' · ');
+      } catch (err) {
+        saveState.textContent = '保存失败：' + err;
+      }
+    });
+  }
+
+  const goLocal = document.getElementById('go-local');
+  if (goLocal) {
+    goLocal.addEventListener('click', async () => {
+      const pathEl = document.getElementById('localpath');
+      const st = document.getElementById('local-state');
+      const path = (pathEl.value || '').trim();
+      if (!path) { st.textContent = '先填一个路径'; return; }
+      if (timer) { clearInterval(timer); timer = null; }
+      goLocal.disabled = true;
+      st.textContent = '提交中…';
+      result.className = 'meta';
+      result.textContent = '已提交，等待队列…';
+      log.hidden = true;
+
+      let resp;
+      try {
+        resp = await fetch('/api/scan-local', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: path }),
+        });
+      } catch (err) {
+        st.textContent = '';
+        result.className = 'error';
+        result.textContent = '请求失败：' + err;
+        goLocal.disabled = false;
+        return;
+      }
+      if (!resp.ok) {
+        const body = await resp.text();
+        st.textContent = '';
+        result.className = 'error';
+        result.textContent = 'HTTP ' + resp.status + '：' + esc(body).slice(0, 300);
+        goLocal.disabled = false;
+        return;
+      }
+      const data = await resp.json();
+      st.textContent = '任务 ' + data.job_id.slice(0, 8) + '…';
+      result.textContent = '已入队：' + esc(data.file);
+      poll(data.job_id);
+    });
+  }
+
   function poll(jobId) {
     let ticks = 0;
     timer = setInterval(async () => {
@@ -129,6 +229,8 @@
       clearInterval(timer);
       timer = null;
       go.disabled = false;
+      const gl = document.getElementById('go-local');
+      if (gl) gl.disabled = false;
       render(j);
     }, 700);
   }
@@ -158,7 +260,14 @@
         <div class="card"><span>恶意</span><b style="color:#c62828">${s.malicious || 0}</b></div>
         <div class="card"><span>AI 研判</span><b>${s.agent_used || 0}</b></div>
       </div>
-      <div class="meta">${s.ai_enabled ? 'AI 判决档：已开启' : 'AI 判决档：关闭 → 结论为<b>确定性判定（规则档，未调用模型）</b>'}</div>
+      <div class="meta">${s.ai_enabled
+        ? 'AI 判决档：已生效'
+        : (s.ai_requested ? 'AI 判决档：<b>请求了但未生效</b>（' + esc(s.ai_fallback || '') + '）→ 结论为确定性判定（规则档）'
+                          : 'AI 判决档：关闭 → 结论为<b>确定性判定（规则档，未调用模型）</b>')}</div>
+      <div class="meta">来源：${esc(s.source || 'upload')}　·　本轮参数：${esc(Object.entries(s.params || {}).map(([k, v]) => k + '=' + v).join(' · '))}</div>
+      ${s.truncated ? '<div class="warn">⚠ 文件数超过单次上限 ' + (s.max_local_files || '') + '，只扫了前一部分</div>' : ''}
+      ${(s.skipped && Object.keys(s.skipped).length)
+        ? '<div class="meta">未进扫描：' + esc(Object.entries(s.skipped).map(([k, v]) => k + ' ' + v).join('、')) + '</div>' : ''}
       <div class="scroll-x">
         <table>
           <thead><tr><th>文件</th><th>判定</th><th>类别</th><th>结论</th><th>结论档位</th></tr></thead>
