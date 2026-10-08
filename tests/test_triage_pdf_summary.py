@@ -230,18 +230,25 @@ def test_pdf_summary_error_is_recorded_not_swallowed(tmp_path: Path) -> None:
     assert "PDF" in user
 
 
-def test_no_io_execution_of_pdf(tmp_path: Path) -> None:
-    """纪律：摘要路径**只读字节**，绝不打开/渲染 PDF。"""
+def test_pdf_summary_reads_bytes_only(tmp_path: Path, monkeypatch) -> None:
+    """纪律：摘要路径**只读字节**，不打开/渲染 PDF。
+
+    2026-10-08 修：原版把 `spy` 定义出来却从没装到 `io.open` 上，`opened == []`
+    恒真、没有任何断言效力（而 `Path.open` 内部正是调 `io.open`，真装上就会失败）。
+    现在真装 spy，断言**样本文件**只以二进制模式被读。
+    """
     path = _write(tmp_path, "evil.pdf", PLAIN_JS_PDF)
-    opened: list[str] = []
     real_open = io.open
+    calls: list[tuple[str, str]] = []
 
-    def spy(file, *args, **kwargs):  # noqa: ANN001, ANN202
-        opened.append(str(file))
-        return real_open(file, *args, **kwargs)
+    def spy(file, mode="r", *args, **kwargs):  # noqa: ANN001, ANN202
+        calls.append((str(file), str(mode)))
+        return real_open(file, mode, *args, **kwargs)
 
-    triage.build_summary(path)
-    # 直接断言"没有第三方渲染器被拉起来"这件事在单元测试里不可观测，
-    # 这里守住可观测的那一半：摘要是用 `Path.open("rb")` 读的，全程二进制。
-    assert "pdf" in (triage.build_summary(path)["kind"],)
-    assert opened == []          # io.open 一次都没被用（读文件走的是 Path.open）
+    monkeypatch.setattr(io, "open", spy)
+    summary = triage.build_summary(path)
+
+    assert summary["kind"] == "pdf"
+    sample_calls = [(f, m) for f, m in calls if f == str(path)]
+    assert sample_calls, "摘要应当读样本文件（经 Path.open → io.open）"
+    assert all("b" in m for _f, m in sample_calls), f"样本必须以二进制读，实际 {sample_calls}"

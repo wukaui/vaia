@@ -1651,6 +1651,9 @@ def scan_file(
                       if store is not None else ScanCache())
     else:
         scan_cache = None
+    # ②层初筛的模型名（进缓存键用；没开初筛就是 None）
+    triage_model_name = (getattr(triage_client, "model", None)
+                         if triage_client is not None else None)
     if scan_cache is not None:
         requested_samples = agent_samples if agent_samples is not None else _agent_samples()
         cached = scan_cache.get(sha256, agent_available=agent is not None,
@@ -1662,7 +1665,15 @@ def scan_file(
                                 # 的结论**不可互换** —— 少了这一项，先跑的基线档会把"未送审"的
                                 # 结论喂给两档档（低档那 16 个文件会被静默跳过，产物看不出异常）。
                                 ai_threshold=ai_threshold,
-                                ai_threshold_low=ai_threshold_low)
+                                ai_threshold_low=ai_threshold_low,
+                                # ②层初筛设置也进键（2026-10-08 修）：开/关、门槛/入口/模型
+                                # 不同 = 结论不可互换。否则先跑的无初筛那一轮会把
+                                # `triage.enabled=False` 的条目喂给带 `--triage` 的那一轮 ——
+                                # 初筛被静默跳过，产物里只看到 tier=none。
+                                triage_enabled=triage_enabled,
+                                triage_threshold=triage_threshold,
+                                triage_entry_gate=triage_entry_gate,
+                                triage_model=triage_model_name)
         if cached:
             fresh_disp = ({"status": "previously_quarantined", "id": prev.get("id")}
                           if prev and prev.get("status") == "quarantined" else {})
@@ -1900,10 +1911,15 @@ def scan_file(
                 f"LLM 初筛 {triage_score} ≥ 门槛 {int(triage_threshold)}："
                 f"灰区（入口 {effective_triage_entry_gate(triage_entry_gate, ai_threshold)}"
                 f"~{ai_threshold - 1}）挑出来送深度 AI")  # noqa: unscored-reason
+        elif triage_score is None:
+            # 调用失败 ≠ 未达门槛（2026-10-08 修）：故障和判定必须分开说，
+            # 否则一份"没跑成"的账会被读成"初筛说它不值得看"。
+            evidence.reasons.append(
+                f"LLM 初筛 失败（{triage_error or '未拿到分数'}）：静默放行（不下结论）"
+                f"—— 这是调用故障，不是初筛给出的判定")  # noqa: unscored-reason
         else:
             evidence.reasons.append(
-                f"LLM 初筛 {'失败（' + triage_error + '）' if triage_score is None else triage_score}"
-                f"：未达门槛 {int(triage_threshold)}，静默放行（不下结论）")  # noqa: unscored-reason
+                f"LLM 初筛 {triage_score}：未达门槛 {int(triage_threshold)}，静默放行（不下结论）")  # noqa: unscored-reason
     route_gate = effective_low_gate(ai_threshold, ai_threshold_low)
     # 初筛选中的文件即使分数低于闸门也要进 ③ —— 这就是这一层的产出。
     triage_selected = bool(evidence.deterministic["triage"]["tier"] == "select")
@@ -2164,7 +2180,9 @@ def scan_file(
                        samples=(agent_samples if agent_samples is not None else _agent_samples()),
                        unpack=allow_unpack and _unpack_enabled(),
                        archives=allow_archives and _archives_enabled(),
-                       ai_threshold=ai_threshold, ai_threshold_low=ai_threshold_low)
+                       ai_threshold=ai_threshold, ai_threshold_low=ai_threshold_low,
+                       triage_enabled=triage_enabled, triage_threshold=triage_threshold,
+                       triage_entry_gate=triage_entry_gate, triage_model=triage_model_name)
     return final_report
 
 

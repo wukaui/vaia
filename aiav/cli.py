@@ -168,6 +168,8 @@ def scan(
         console.print(f"[cyan]送审闸门：单档 ≥{ai_threshold}（低档已关闭）[/cyan]")
 
     # ---- ②层 LLM 初筛（2026-09-27）----
+    from aiav.cache import cache_enabled
+
     # 配置来源优先级：显式 `--triage` > 环境变量 `AI_AV_TRIAGE`。默认关。
     # 为什么默认关：这一层要真花钱，而且"打开它"本身就是一次实验设计决定 ——
     # 静默开启会让所有既有复现命令的成本变样。
@@ -186,6 +188,20 @@ def scan(
             console.print(f"[yellow]②层 LLM 初筛未启用（{type(exc).__name__}: {exc}）[/yellow]")
     elif triage_on:
         console.print("[yellow]②层 LLM 初筛已请求，但没有可用的深度 AI Agent —— 跳过[/yellow]")
+
+    # ②层初筛的缓存（2026-10-08 修）：以前流水线只传 `triage_client`、不传 `triage_cache`，
+    # 每次扫描都重新计费 —— 与 `triage_cached` 的 docstring（"流水线与脚本都走这个函数"）
+    # 矛盾。这里按与 `ScanCache` 同一个开关（`AI_AV_CACHE`）建一份，和 `aiav triage`
+    # 命令共用缓存目录；缓存目录跟随 `--state-dir`，不同 store 之间不串味。
+    triage_cache = None
+    if triage_client is not None and cache_enabled():
+        from aiav.cache import TriageCache, default_triage_cache_dir
+
+        triage_cache = TriageCache(
+            root=(Path(store.root) / "triage-cache") if store is not None
+            else default_triage_cache_dir(),
+            store_root=Path(store.root) if store is not None else None)
+        console.print(f"[cyan]②层初筛缓存：{triage_cache.root}[/cyan]")
 
     if skip_stats:
         skipped = sum(skip_stats.values())
@@ -262,6 +278,7 @@ def scan(
                 triage_threshold=triage_threshold,
                 triage_entry_gate=triage_entry_gate,
                 triage_client=triage_client,
+                triage_cache=triage_cache,
             )
             progress.advance(task, len(files))
             for file_path, report in zip(files, reports):
@@ -281,7 +298,8 @@ def scan(
                                    triage_enabled=triage_client is not None,
                                    triage_threshold=triage_threshold,
                                    triage_entry_gate=triage_entry_gate,
-                                   triage_client=triage_client)
+                                   triage_client=triage_client,
+                                   triage_cache=triage_cache)
                 reports.append(report)
                 progress.advance(task)
 

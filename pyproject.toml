@@ -23,6 +23,10 @@ dependencies = [
     "oletools>=0.60",
     "olefile>=0.47",
     "pypdf>=4.0",
+    # token 计数（②层摘要预算闸 + 成本账）。没有它 `triage.count_tokens` 会退到
+    # `len(text)//4` —— 中文实测低估约 3.6 倍（140 vs 实际 507），干净安装上预算闸会失效。
+    # 2026-10-08 补进必装（此前一直靠本机偶然装了）。
+    "tiktoken>=0.7",
     # `pdfid`（Didier Stevens）—— PDF **结构面**计数（对象数 / 流数 / /Encrypt / /ObjStm /
     # /JS / /OpenAction …）。用在②层最小摘要的 PDF 分支（`aiav/triage.py::_pdf_summary`）。
     # 为什么钉成**必装**而不是"可选加速"：摘要是喂给模型的**输入**，输入不同 → 分数不同。
