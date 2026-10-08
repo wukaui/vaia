@@ -1,0 +1,99 @@
+======================================================================
+产物：/tmp/rd-ai-r1　生成于 2026-09-30T12:36:36
+扫描 319 个（语料 320：良性 300 + 恶意 20，1 个良性因内容重复被去重）
+①层处置：{'closed_malicious': 15, 'send_ai': 18, 'pass': 258, 'closed_clean': 28}
+②层：候选 96 / 选中 7 / 放行 89 / 没拿到分 0
+③层：深度研判 18 个（规则直送 11 + 初筛 7）
+送审率：0.0564（18/319）
+最终判定：{'malicious': 17, 'suspicious': 3, 'clean': 299}
+恶意召回：1.000（20/20）
+良性：送审率 0.0435，误报 0 个（0.0000）
+token：初筛 168,055 + 深度 165,023 = 333,078　成本 ¥2.6646
+ClamAV 命中 15　文件级错误 0
+--- 20 个恶意样本逐个 ---
+    ('malicious', 2250, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 425, 'send_ai', 'high', None, 'none', 'suspicious', 'packed loader / crypter (疑似加密载荷加载器)')
+    ('malicious', 375, 'send_ai', 'high', None, 'none', 'malicious', 'trojan dropper/loader（资源内嵌加密载荷的小型加载器）')
+    ('malicious', 1425, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 375, 'send_ai', 'high', None, 'none', 'malicious', 'loader/dropper（资源段内嵌加密载荷的小型加载器）')
+    ('malicious', 1375, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 275, 'send_ai', 'high', None, 'none', 'suspicious', 'packed-loader（疑似加壳/加密载荷的投递体）')
+    ('malicious', 2250, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1225, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 2250, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1425, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1425, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 425, 'send_ai', 'high', None, 'none', 'suspicious', 'packed loader / dropper (stub + 加密载荷)')
+    ('malicious', 1275, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1425, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 2250, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1275, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1275, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1375, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 2250, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+======================================================================
+产物：/tmp/rd-ai-r2　生成于 2026-09-30T12:45:50
+扫描 319 个（语料 320：良性 300 + 恶意 20，1 个良性因内容重复被去重）
+①层处置：{'closed_malicious': 15, 'send_ai': 17, 'pass': 259, 'closed_clean': 28}
+②层：候选 96 / 选中 6 / 放行 90 / 没拿到分 0
+③层：深度研判 17 个（规则直送 11 + 初筛 6）
+送审率：0.0533（17/319）
+最终判定：{'malicious': 17, 'suspicious': 3, 'clean': 299}
+恶意召回：1.000（20/20）
+良性：送审率 0.0401，误报 0 个（0.0000）
+token：初筛 165,211 + 深度 140,271 = 305,482　成本 ¥2.4439
+ClamAV 命中 15　文件级错误 0
+--- 20 个恶意样本逐个 ---
+    ('malicious', 2250, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 425, 'send_ai', 'high', None, 'none', 'suspicious', 'packed-loader (疑似加壳加载器/未知载荷)')
+    ('malicious', 375, 'send_ai', 'high', None, 'none', 'malicious', 'loader/dropper (packed resource payload)')
+    ('malicious', 1425, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 375, 'send_ai', 'high', None, 'none', 'suspicious', 'loader/dropper（疑似资源段加密载荷）')
+    ('malicious', 1375, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 275, 'send_ai', 'high', None, 'none', 'suspicious', 'packed/loader (unconfirmed payload)')
+    ('malicious', 2250, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1225, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 2250, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1425, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1425, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 425, 'send_ai', 'high', None, 'none', 'malicious', 'loader / packed dropper')
+    ('malicious', 1275, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1425, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 2250, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1275, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1275, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1375, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 2250, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+======================================================================
+产物：/tmp/rd-ai-g300　生成于 2026-09-30T12:53:45
+扫描 319 个（语料 320：良性 300 + 恶意 20，1 个良性因内容重复被去重）
+①层处置：{'closed_malicious': 15, 'send_ai': 15, 'pass': 261, 'closed_clean': 28}
+②层：候选 96 / 选中 4 / 放行 92 / 没拿到分 0
+③层：深度研判 15 个（规则直送 11 + 初筛 4）
+送审率：0.0470（15/319）
+最终判定：{'malicious': 17, 'suspicious': 3, 'clean': 299}
+恶意召回：1.000（20/20）
+良性：送审率 0.0334，误报 0 个（0.0000）
+token：初筛 136,507 + 深度 121,943 = 258,450　成本 ¥2.0676
+ClamAV 命中 15　文件级错误 0
+--- 20 个恶意样本逐个 ---
+    ('malicious', 2250, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 425, 'send_ai', 'high', None, 'none', 'malicious', 'loader/packed-trojan (encrypted payload ')
+    ('malicious', 375, 'send_ai', 'high', None, 'none', 'malicious', 'dropper/loader (embedded encrypted paylo')
+    ('malicious', 1425, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 375, 'send_ai', 'high', None, 'none', 'suspicious', 'loader/dropper（资源内嵌载荷型 stub）')
+    ('malicious', 1375, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 275, 'send_ai', 'low', None, 'none', 'suspicious', 'packed')
+    ('malicious', 2250, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1225, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 2250, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1425, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1425, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 425, 'send_ai', 'high', None, 'none', 'suspicious', 'packer/loader')
+    ('malicious', 1275, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1425, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 2250, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1275, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1275, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 1375, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
+    ('malicious', 2250, 'closed_malicious', 'none', None, None, 'malicious', 'deterministic_malicious')
