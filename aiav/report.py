@@ -963,12 +963,19 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
             f"{low['confidence_min']:.2f}~{low['confidence_max']:.2f}"
             f"（均值 {low['confidence_mean']:.2f}）" if low.get("confidence_mean") is not None
             else "N/A"))
+        # 先算成变量再插值：这里原来是 f-string 里再嵌 f-string 且同引号，
+        # 属于 PEP 701（Python 3.12+），但 pyproject 声明 requires-python >=3.11，
+        # 3.11 下 import 本模块直接 SyntaxError。2026-10-09 修。
+        degraded = low.get("degraded", 0)
+        degraded_note = (
+            f"、<b class='error'>降级到规则 {degraded} 个</b>" if degraded else ""
+        )
         low_note = (
             f"<div class='meta'><b>两档送审</b>：高档 <b>≥{det['gate']}</b> {det.get('sent_high', 0)} 个 · "
             f"低档 <b>{det['gate_low']}~{det['gate'] - 1}</b>（<b>也送 AI</b>）"
             f"{det.get('sent_low', 0)} 个 —— 其中 AI 真判了 {low.get('ai_files', 0)} 个、"
             f"判 flag {low.get('flagged', 0)} 个、{conf_txt}"
-            f"{f'、<b class="error">降级到规则 {low["degraded"]} 个</b>' if low.get('degraded') else ''}"
+            f"{degraded_note}"
             f" · 静默放行（<b>&lt;{det['gate_low']}</b>，不送、不下结论）{tiers.get('none', 0)} 个。"
             "低档与高档走的是**同一条送审路径**，只差报告字段 <code>ai_tier</code>。</div>")
     else:
