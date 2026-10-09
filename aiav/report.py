@@ -772,6 +772,16 @@ def _file_row(r: FileReport, index: int) -> str:
         tier = ("high" if r.agent_used or (r.deterministic or {}).get("disposition") == "send_ai"
                 else "none")
     triage_info = (r.deterministic or {}).get("triage") or {}
+    # 逐文件把初筛失败也写出来（2026-10-08 修）：失败 ≠ 未达门槛，原来失败在 HTML 里
+    # 只显示"未送（静默）"，读报告的人分不清"初筛说它不值得看"和"初筛没跑成"。
+    triage_error = str(triage_info.get("error") or "")
+    if triage_info.get("tier") == "drop":
+        triage_none_extra = f"·初筛 {triage_info.get('score')} 未达门槛"
+    elif triage_info.get("enabled") and triage_info.get("score") is None and triage_error:
+        triage_none_extra = (f"·<b class='error'>初筛失败</b>"
+                             f"<span class='dim'>（{_esc(triage_error[:120])}）</span>")
+    else:
+        triage_none_extra = ""
     tier_label = {"high": "高档送审", "low": "低档送审",
                   "triage": f"初筛送审（{triage_info.get('score')} 分）",
                   "none": "未送（静默）"}[tier]
@@ -780,9 +790,8 @@ def _file_row(r: FileReport, index: int) -> str:
                   "triage": (f"<b style='color:#6a1b9a'>初筛送审</b>"
                              f"<span class='dim'>（初筛 {triage_info.get('score')}/100 · "
                              f"门槛 {triage_info.get('threshold')}）</span>"),
-                  "none": ("<span class='dim'>未送（静默"
-                           + (f"·初筛 {triage_info.get('score')} 未达门槛"
-                              if triage_info.get("tier") == "drop" else "") + "）</span>")}[tier])
+                  "none": ("<span class='dim'>未送（静默" + triage_none_extra
+                           + "）</span>")}[tier])
     # 置信度这一列：走 AI 的是**模型给的**置信度；没走 AI 的是规则兜底那几条
     # （0.65/0.75 这种常量），必须标出来 —— 否则读报告的人会把规则置信度当成 AI 置信度。
     conf_cell = (f"{r.verdict.confidence:.2f}" if r.agent_used
@@ -954,12 +963,19 @@ def _render_html(reports: list[FileReport], summary: dict[str, Any] | None = Non
             f"{low['confidence_min']:.2f}~{low['confidence_max']:.2f}"
             f"（均值 {low['confidence_mean']:.2f}）" if low.get("confidence_mean") is not None
             else "N/A"))
+        # 先算成变量再插值：这里原来是 f-string 里再嵌 f-string 且同引号，
+        # 属于 PEP 701（Python 3.12+），但 pyproject 声明 requires-python >=3.11，
+        # 3.11 下 import 本模块直接 SyntaxError。2026-10-09 修。
+        degraded = low.get("degraded", 0)
+        degraded_note = (
+            f"、<b class='error'>降级到规则 {degraded} 个</b>" if degraded else ""
+        )
         low_note = (
             f"<div class='meta'><b>两档送审</b>：高档 <b>≥{det['gate']}</b> {det.get('sent_high', 0)} 个 · "
             f"低档 <b>{det['gate_low']}~{det['gate'] - 1}</b>（<b>也送 AI</b>）"
             f"{det.get('sent_low', 0)} 个 —— 其中 AI 真判了 {low.get('ai_files', 0)} 个、"
             f"判 flag {low.get('flagged', 0)} 个、{conf_txt}"
-            f"{f'、<b class="error">降级到规则 {low["degraded"]} 个</b>' if low.get('degraded') else ''}"
+            f"{degraded_note}"
             f" · 静默放行（<b>&lt;{det['gate_low']}</b>，不送、不下结论）{tiers.get('none', 0)} 个。"
             "低档与高档走的是**同一条送审路径**，只差报告字段 <code>ai_tier</code>。</div>")
     else:

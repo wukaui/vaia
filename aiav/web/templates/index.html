@@ -2,9 +2,18 @@
 {% set active = 'index' %}
 {% block body %}
   <h1>「第二意见」AI 恶意文件研判台</h1>
-  <div class="meta">本地 Web UI（阶段一）· 上传单个文件 → 规则档确定性判定 → 生成与 CLI 完全一致的报告</div>
-  <div class="meta">AI 判决档：{% if ai_enabled %}<b>已开启</b>（走模型，有 token 上限）{% else %}<b>关闭</b>（确定性判定·规则档，未调用模型）{% endif %}
-    ｜单并发：同一时刻只跑一个任务，队列满返回 429</div>
+  <div class="meta">本地 Web UI · 上传单个文件 → 按下述参数扫描 → 生成与 CLI 完全一致的报告</div>
+
+  <div class="meta" id="ai-banner">
+    {% if ai.allowed and ai.ready %}
+      AI 判决档：<b>可用</b>（勾选后走模型，受单次 token 预算约束）
+    {% elif ai.allowed %}
+      AI 判决档：<b>不可用</b> —— {{ ai.reason }}。勾了也会<b>退回确定性判定（规则档）</b>，报告里会写明。
+    {% else %}
+      AI 判决档：<b>关闭</b>（{{ ai.reason }}）
+    {% endif %}
+    ｜单并发：同一时刻只跑一个任务，队列满返回 429
+  </div>
 
   <div class="drop" id="drop">
     <strong>把文件拖到这里</strong>，或点击选择（单文件，上限 {{ max_upload_mb }}MB）
@@ -16,6 +25,48 @@
     <button id="reset">清空</button>
     <span class="meta" id="state"></span>
   </div>
+
+  {% if allow_local_path %}
+  <details class="settings" id="local-box" open>
+    <summary>或者：直接扫<b>服务器本地路径</b>（文件 / 文件夹，不复制、不执行；单次最多 {{ max_local_files }} 个文件）</summary>
+    <div class="toolbar">
+      <input type="text" id="localpath" placeholder="/home/wukuai/ai-av-bench/dike-bench/files  （文件夹或单个文件）">
+      <button class="primary" id="go-local">扫描本地路径</button>
+      <span class="meta" id="local-state"></span>
+    </div>
+    <div class="meta">文件夹按与 CLI 同一套规则遍历：跳过系统/隐藏目录、单个 &gt;50MB 的文件跳过；
+      跳过了什么、有没有被单次上限截断，报告里都会写明。</div>
+  </details>
+  {% else %}
+  <div class="meta">要扫本地文件夹？用 <code>AI_AV_WEB_ALLOW_LOCAL_PATH=1</code> 重启本服务即可（可选再用
+    <code>AI_AV_WEB_LOCAL_ROOTS=/允许的根目录</code> 收口）。</div>
+  {% endif %}
+
+  <details class="settings" id="settings" {% if not ai.ready and ai.allowed %}open{% endif %}>
+    <summary>扫描参数（保存后对新任务生效，存在服务端 <code>web-settings.json</code>）</summary>
+    <div class="meta" id="save-state"></div>
+    <div class="grid">
+      <label><input type="checkbox" id="p-ai" {% if not ai.allowed %}disabled{% endif %}>
+        AI 判决档（③层深度研判）</label>
+      <label><input type="checkbox" id="p-triage" {% if not ai.allowed %}disabled{% endif %}>
+        ②层 LLM 初筛</label>
+      <label>送审闸门 <code>ai_threshold</code>
+        <input type="number" id="p-ai_threshold" min="1" value="{{ params.ai_threshold }}"></label>
+      <label>低档送审 <code>ai_threshold_low</code>（0=关闭）
+        <input type="number" id="p-ai_threshold_low" min="0" value="{{ params.ai_threshold_low }}"></label>
+      <label>初筛门槛 <code>triage_threshold</code>
+        <input type="number" id="p-triage_threshold" min="0" max="100" value="{{ params.triage_threshold }}"></label>
+      <label>初筛入口 <code>triage_entry_gate</code>
+        <input type="number" id="p-triage_entry_gate" min="0" value="{{ params.triage_entry_gate }}"></label>
+      <label>分流取证阈值 <code>deep_evidence_threshold</code>（0=不分流）
+        <input type="number" id="p-deep_evidence_threshold" min="0" value="{{ params.deep_evidence_threshold }}"></label>
+      <label>单次 token 预算 <code>token_budget</code>（0=不限）
+        <input type="number" id="p-token_budget" min="0" value="{{ params.token_budget }}"></label>
+    </div>
+    <div class="toolbar">
+      <button id="save">保存参数</button>
+    </div>
+  </details>
 
   <h2>结果</h2>
   <div id="result" class="meta">还没有任务。</div>

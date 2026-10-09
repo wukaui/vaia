@@ -23,8 +23,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from aiav.web.config import WebConfig
-from aiav.web.jobs import JobManager, TERMINAL_STATUSES, cleanup_uploads, safe_display_name
+from aiav.web.config import ScanParams, WebConfig
+from aiav.web.jobs import (JobManager, TERMINAL_STATUSES, cleanup_uploads,
+                           safe_display_name, safe_upload_suffix)
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -80,10 +81,12 @@ def create_app(config: WebConfig | None = None) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
         return templates.TemplateResponse(request, "index.html", {
-            "config": request.app.state.config,
+            "config": config,
             "max_upload_mb": config.max_upload_mb,
-            "ai_enabled": config.ai_enabled,
+            "params": request.app.state.manager.params().to_dict(),
+            "ai": request.app.state.manager.ai_status(),
             "allow_local_path": config.allow_local_path,
+            "max_local_files": config.max_local_files,
         })
 
     @app.get("/report/{job_id}", response_class=HTMLResponse)
@@ -105,6 +108,26 @@ def create_app(config: WebConfig | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="报告文件不在磁盘上了")
         return HTMLResponse(path.read_text(encoding="utf-8"))
 
+    # ---------------- 扫描参数（页面可改） ----------------
+    @app.get("/api/settings")
+    async def get_settings(request: Request):
+        mgr = request.app.state.manager
+        return {
+            "params": mgr.params().to_dict(),
+            "limits": ScanParams.LIMITS,
+            "ai": mgr.ai_status(),
+        }
+
+    @app.put("/api/settings")
+    async def put_settings(request: Request):
+        mgr = request.app.state.manager
+        try:
+            body = await request.json()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail="请求体必须是 JSON") from exc
+        saved = mgr.set_params(body)
+        return {"params": saved.to_dict(), "ai": mgr.ai_status()}
+
     # ---------------- 扫描接口 ----------------
     @app.post("/api/scan")
     async def api_scan(request: Request, file: UploadFile | None = None):
@@ -115,8 +138,10 @@ def create_app(config: WebConfig | None = None) -> FastAPI:
         job_id = uuid.uuid4().hex
         dest_dir = config.uploads_dir / job_id
         dest_dir.mkdir(parents=True, exist_ok=True)
-        # 落盘名固定为 upload.bin：客户端给的文件名只当展示字符串用（不参与路径）
-        dest = dest_dir / "upload.bin"
+        # 落盘名 = upload + 原始扩展名（2026-10-08 修）：扩展名是判据的一部分
+        # （HIGH_RISK_EXTENSION、按类型选工具），丢了等于静默降级。
+        # 客户端给的文件名只用来取后缀，不参与路径拼接；目录是 uuid。
+        dest = dest_dir / f"upload{safe_upload_suffix(file.filename)}"
 
         total = 0
         try:
@@ -152,6 +177,33 @@ def create_app(config: WebConfig | None = None) -> FastAPI:
                 content={"detail": "扫描队列已满（单并发），稍后再试", "max_queued": config.max_queued},
             )
         return {"job_id": job.job_id, "status": job.status, "file": job.display_name}
+
+    @app.post("/api/scan-local")
+    async def api_scan_local(request: Request):
+        """直接扫**服务器本地路径**（文件或目录），不复制、不上传，只读。
+
+        默认关：开了才允许（`AI_AV_WEB_ALLOW_LOCAL_PATH=1`）。原因是本机语料动辄几千个文件，
+        一个个拖上传不现实；而本地路径读取是个口子，所以必须显式 opt-in，
+        还可以用 `AI_AV_WEB_LOCAL_ROOTS` 把范围收在指定根目录内。
+        """
+        manager: JobManager = request.app.state.manager
+        try:
+            body = await request.json()
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail="请求体必须是 JSON") from exc
+        path, err = config.check_local_path((body or {}).get("path"))
+        if path is None:
+            raise HTTPException(status_code=400, detail=err)
+
+        job = manager.register_local(path)
+        if not manager.submit(job):
+            manager.discard(job.job_id)
+            return JSONResponse(
+                status_code=429,
+                content={"detail": "扫描队列已满（单并发），稍后再试", "max_queued": config.max_queued},
+            )
+        return {"job_id": job.job_id, "status": job.status,
+                "file": job.display_name, "source": job.source}
 
     @app.get("/api/scan/{job_id}")
     async def api_scan_status(request: Request, job_id: str):
@@ -212,7 +264,8 @@ def create_app(config: WebConfig | None = None) -> FastAPI:
         """自检页：数出"横向溢出"实测值，供 `scripts/web_screenshots.py` 做手机宽度验收。
 
         为什么要有它：headless chrome 的截图窗口最小 500px（硬限制），
-        所以"≤420px 不崩"这条不能靠肉眼看截图，得靠**可复现的实测数字**：
+        所以"≤420px 不崩"这条不能靠肉眼看截图，得靠**可复现的实测数字**
+        （页面会把测量结果打成 `LAYOUT_JSON:` 一行，供外部验收脚本读取）：
         `scrollWidth / clientWidth`（文档是否溢出）+ 每张表的
         `scrollWidth > clientWidth`（表格是否落在可横向滚动的容器里）。
         页面上只有数字，没有任何敏感信息。

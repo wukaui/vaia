@@ -79,6 +79,9 @@ PDF_URI_MAX = 5
 PDF_EMBEDDED_MAX = 5
 #: 单条 JS 片段最长字符数（一条 base64 blob 能吃掉整份预算）。
 PDF_JS_CHARS = 240
+#: 原始字节补扫 JS 字面量时最多读多少 —— `read_bytes()` 无上限会把整个坏样本吞进内存
+#: （2026-10-08 加闸）；正常投递 PDF 远小于这个数，超出部分仍由 pypdf 对象树那条路覆盖。
+PDF_RAW_READ_LIMIT = 16 * 1024 * 1024
 #: 单文件提示词的 token 目标（硬上限靠 `TRIAGE_MAX_PROMPT_TOKENS` 覆盖）。
 TARGET_PROMPT_TOKENS = 1000
 #: 摘要最多读进内存的字节数（熵/字符串只在前 1MB 上算 —— 成本与代表性之间取的档）。
@@ -475,7 +478,10 @@ def _pdf_summary(path: Path, summary: dict[str, Any]) -> None:
         #   · 原始 `/JS (…)` 字面量在"xref 坏了"的投递样本上仍然可读（7/60）。
         blobs: list[str] = list(info.get("javascript") or [])
         try:
-            blobs.extend(raw_js_literals(path.read_bytes(), limit=8))
+            # 有上限地读：坏样本可能巨大，`read_bytes()` 无闸（2026-10-08 修）。
+            with path.open("rb") as fh:
+                raw_blob = fh.read(PDF_RAW_READ_LIMIT)
+            blobs.extend(raw_js_literals(raw_blob, limit=8))
         except OSError as exc:
             pdf["errors"].append(f"原始字节读取失败: {type(exc).__name__}: {exc}"[:120])
         snippets, readable_total, raw_total = _js_snippets(blobs)

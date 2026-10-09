@@ -24,7 +24,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from aiav.models import FileReport
+from .models import FileReport
 
 CACHE_VERSION = "6"          # 改报告结构/语义时 +1，让旧条目整体失效
 
@@ -135,6 +135,14 @@ class ScanCache:
         if self._fp is None:
             self._fp = {"version": CACHE_VERSION, "rules": rules_fingerprint(),
                         "prompt": prompt_fingerprint(), "clamav": clamav_fingerprint()}
+            # ②层初筛的摘要/提示词版本也进指纹（2026-10-08 修）：缓存条目里带着初筛结论，
+            # 版本一变旧条目就该整体失效 —— 与 `TriageCache` 同一口径。
+            try:
+                from aiav.triage import TRIAGE_VERSION
+
+                self._fp["triage"] = TRIAGE_VERSION
+            except Exception:  # noqa: BLE001 - 拿不到版本也要能扫
+                self._fp["triage"] = "unknown"
         return self._fp
 
     def current_fingerprints(self) -> dict[str, str]:
@@ -147,7 +155,9 @@ class ScanCache:
     # ---------------- 读写 ----------------
     @staticmethod
     def mode(agent_available: bool, unpack: bool, archives: bool, deterministic: bool = True,
-             ai_threshold: int | None = None, ai_threshold_low: int | None = None) -> str:
+             ai_threshold: int | None = None, ai_threshold_low: int | None = None,
+             triage_enabled: bool | None = None, triage_threshold: int | None = None,
+             triage_entry_gate: int | None = None, triage_model: str | None = None) -> str:
         """分析选项指纹：不同选项算出来的结论不能互相顶替。
 
         踩过的坑：`allow_unpack=False` 的那一臂先把"没脱壳"的结论写进缓存，
@@ -169,13 +179,32 @@ class ScanCache:
             gate = AI_GATE if ai_threshold is None else int(ai_threshold)
             gate_low = AI_GATE_LOW if ai_threshold_low is None else int(ai_threshold_low)
             mode += f";gate={gate};gate_low={gate_low}"
+        # ②层初筛也是选项（2026-10-08 修）：`--triage` 开/关、门槛/入口/模型不同，
+        # 缓存里的结论**不可互换**。少了这一段，先跑的无初筛那一轮会把
+        # `triage.enabled=False` 的条目喂给带 `--triage` 的那一轮 —— 初筛被静默跳过，
+        # 报告里只看到 tier=none，与"初筛说它不值得看"分不开（本项目最忌的静默失效）。
+        if (triage_enabled is not None or triage_threshold is not None
+                or triage_entry_gate is not None or triage_model is not None):
+            from aiav.criteria import TRIAGE_ENTRY_GATE, TRIAGE_GATE
+
+            if bool(triage_enabled):
+                t_th = TRIAGE_GATE if triage_threshold is None else int(triage_threshold)
+                t_en = (TRIAGE_ENTRY_GATE if triage_entry_gate is None
+                        else int(triage_entry_gate))
+                mode += f";triage=1;tgate={t_th};tentry={t_en};tmodel={triage_model or ''}"
+            else:
+                # 关掉初筛时门槛/模型不影响结论，别把同一份"没开初筛"拆成多个键
+                mode += ";triage=0"
         return mode
 
     def get(self, sha256: str, *, agent_available: bool, samples: int,
             unpack: bool = True, archives: bool = True,
             deterministic: bool = True,
             ai_threshold: int | None = None,
-            ai_threshold_low: int | None = None) -> dict[str, Any] | None:
+            ai_threshold_low: int | None = None,
+            triage_enabled: bool | None = None, triage_threshold: int | None = None,
+            triage_entry_gate: int | None = None,
+            triage_model: str | None = None) -> dict[str, Any] | None:
         if not self.enabled or not sha256:
             return None
         path = self._path(sha256)
@@ -193,7 +222,9 @@ class ScanCache:
             return None
         # 分析选项必须一致（脱壳/压缩包/AI 开关/闸门不同 = 结论不可互换）
         if meta.get("mode") != self.mode(agent_available, unpack, archives, deterministic,
-                                         ai_threshold, ai_threshold_low):
+                                         ai_threshold, ai_threshold_low,
+                                         triage_enabled, triage_threshold, triage_entry_gate,
+                                         triage_model):
             return None
         if sample_count(meta) < max(1, samples):
             return None
@@ -203,7 +234,10 @@ class ScanCache:
             unpack: bool = True, archives: bool = True,
             deterministic: bool = True,
             ai_threshold: int | None = None,
-            ai_threshold_low: int | None = None) -> bool:
+            ai_threshold_low: int | None = None,
+            triage_enabled: bool | None = None, triage_threshold: int | None = None,
+            triage_entry_gate: int | None = None,
+            triage_model: str | None = None) -> bool:
         if not self.enabled or not sha256:
             return False
         payload = report.model_dump(mode="json")
@@ -216,7 +250,9 @@ class ScanCache:
                 "fingerprints": self.current_fingerprints(),
                 "ai_enabled": ai_enabled,
                 "mode": self.mode(ai_enabled, unpack, archives, deterministic,
-                                  ai_threshold, ai_threshold_low),
+                                  ai_threshold, ai_threshold_low,
+                                  triage_enabled, triage_threshold, triage_entry_gate,
+                                  triage_model),
                 "samples": max(1, samples),
                 "cache_version": CACHE_VERSION,
             },

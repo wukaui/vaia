@@ -150,7 +150,10 @@ def _stub_evidence(path: str, score: int, kwargs: dict) -> PreliminaryEvidence:
 def _patch(monkeypatch, tmp_path: Path, score: int, prefilter: int):
     """统一的测试台：假预筛 + 假模型 + 假深度 AI，返回"深度 AI 被调了几次"的列表。"""
     p = tmp_path / "t.exe"
-    p.write_bytes(b"MZ" + b"\x01" * 64)
+    # 桩内容**按用例加盐**：扫描缓存的键是**内容 sha256**，内容一样 = 上一条用例写下的
+    # 结论会被这一条原样读走（2026-09-29 那 5 条恒红就是踩了这个：`agent_used` 变 True、
+    # 初筛分变成别人的 80、深度 AI 一次没被调）。目录名带用例名，天然唯一。
+    p.write_bytes(b"MZ" + b"\x01" * 64 + tmp_path.name.encode())
     monkeypatch.setenv("AI_AV_SIGNATURE_CHECK", "0")
     monkeypatch.setattr(scanner, "quick_prefilter",
                         lambda *a, **k: _stub_evidence(str(p), prefilter, k))
@@ -254,9 +257,10 @@ def test_triage_off_by_default_never_calls_the_model(tmp_path, monkeypatch):
 def test_collect_triage_scores_only_pays_for_the_gray_band(tmp_path, monkeypatch):
     """批量挑候选：只有灰区未结案的文件被送去花钱，其余三类各有计数。"""
     p125, client, _ = _patch(monkeypatch, tmp_path, 70, 125)
-    # 四个文件都得真存在（sha 要算得出来）；内容各不相同，免得 sha 撞在一起。
+    # 四个文件都得真存在（sha 要算得出来）；内容各不相同 + 按用例加盐，
+    # 免得 sha 撞在一起（撞了就是缓存串味，见 `_patch` 里的说明）。
     for i, name in enumerate(("t.exe", "high.exe", "zero.exe", "closed.exe")):
-        (tmp_path / name).write_bytes(b"MZ" + bytes([i + 1]) * 64)
+        (tmp_path / name).write_bytes(b"MZ" + bytes([i + 1]) * 64 + tmp_path.name.encode())
 
     # 四个文件各代表一类：灰区候选 / ≥闸门 / <入口 / ①层结案
     scores = {"t.exe": 125, "high.exe": 425, "zero.exe": 0, "closed.exe": 1125}
@@ -373,3 +377,133 @@ def test_report_counts_the_triage_tier(tmp_path) -> None:
     assert "只看初筛送审" in text
     assert 'data-tier="triage"' in text
     assert "没拿到分数" in text                     # 抬头把"故障 ≠ 判定"写出来了
+    # 逐文件行也要能看出"初筛失败"（2026-10-08 修：以前失败只显示"未送（静默）"）
+    assert "初筛失败" in text
+    assert "empty_output" in text
+
+
+# ------------------------------------------------------------------ 2026-10-08 修复：失败文案 / 缓存键
+
+def test_triage_failure_reason_never_says_below_threshold(tmp_path, monkeypatch):
+    """自由文本里也不许把"调用失败"写成"未达门槛"。
+
+    结构化 `tier=none` 早已正确，但 `prefilter_reasons` 的自由文本曾拼成
+    「LLM 初筛 失败（…）：未达门槛 60」—— 一次故障被读成一个判定，
+    正是项目书 6.2.3 说的"最隐蔽的一类错误"。
+    """
+    p, client, called = _patch(monkeypatch, tmp_path, None, 125)
+    report = _scan(p, client)
+
+    reasons = [r for r in report.prefilter_reasons if "初筛" in r]
+    assert reasons, "应当留下一条初筛理由"
+    joined = " ".join(reasons)
+    assert "失败" in joined
+    assert "未达门槛" not in joined          # 失败 ≠ 未达门槛
+    assert "调用故障" in joined
+
+
+def test_triage_drop_reason_still_says_below_threshold(tmp_path, monkeypatch):
+    """真正"未达门槛"（拿到分但 < 门槛）的文案不许被误伤。"""
+    p, client, called = _patch(monkeypatch, tmp_path, 40, 125)
+    report = _scan(p, client)
+
+    joined = " ".join(r for r in report.prefilter_reasons if "初筛" in r)
+    assert "未达门槛" in joined
+    assert "失败" not in joined
+
+
+def test_scan_cache_mode_carries_triage_settings():
+    """②层初筛设置必须进 `ScanCache.mode` 键（否则初筛会被缓存静默跳过）。"""
+    from aiav.cache import ScanCache
+
+    off = ScanCache.mode(True, True, True, True, 300, 0, False, 60, 125, None)
+    on = ScanCache.mode(True, True, True, True, 300, 0, True, 60, 125, "fake-flash")
+    assert off != on
+    # 门槛 / 入口 / 模型 任一不同 → 键不同
+    assert on != ScanCache.mode(True, True, True, True, 300, 0, True, 70, 125, "fake-flash")
+    assert on != ScanCache.mode(True, True, True, True, 300, 0, True, 60, 100, "fake-flash")
+    assert on != ScanCache.mode(True, True, True, True, 300, 0, True, 60, 125, "other-flash")
+    # 关掉初筛时，门槛/模型不该把同一份"没开初筛"拆成多个键
+    assert off == ScanCache.mode(True, True, True, True, 300, 0, False, 99, 1, "x")
+
+
+def test_scan_cache_does_not_reuse_triage_off_report_for_triage_on(tmp_path, monkeypatch):
+    """先跑无初筛、再跑有初筛：第二轮不许命中第一轮的缓存。
+
+    这是"缓存吃掉第二层"的最小复现：旧 `mode` 不含初筛设置，第二轮 `--triage`
+    直接吃第一轮的条目，报告回到 `triage.enabled=False`、初筛被静默跳过。
+    """
+    from aiav.cache import ScanCache
+
+    p, client, called = _patch(monkeypatch, tmp_path, 80, 125)
+    cache = ScanCache(root=tmp_path / "cache")
+
+    common = dict(agent=object(), ai_threshold=300, ai_threshold_low=0, store=None,
+                  allow_unpack=False, allow_archives=False, cache=cache,
+                  deep_evidence_threshold=0)
+
+    # 第一轮：无初筛 → 写进 triage=0 的条目
+    r1 = scanner.scan_file(p, triage_enabled=False, triage_client=None, **common)
+    assert r1.deterministic["triage"]["enabled"] is False
+    assert (r1.cache or {}).get("from_cache") is not True
+
+    # 第二轮：开初筛 → 必须不命中第一轮，真跑初筛
+    r2 = scanner.scan_file(p, triage_enabled=True, triage_client=client, **common)
+    assert (r2.cache or {}).get("from_cache") is not True, "开了初筛却吃了无初筛的缓存"
+    assert r2.deterministic["triage"]["enabled"] is True
+    assert r2.deterministic["triage"]["score"] == 80
+    assert r2.deterministic["ai_tier"] == "triage"
+
+
+def test_cli_scan_injects_triage_cache(tmp_path, monkeypatch):
+    """主扫描必须把 `TriageCache` 传进 `scan_file`（2026-10-08 修）。
+
+    以前 CLI 只传 `triage_client`、不传 `triage_cache`，生产扫描 ②层每轮重新计费，
+    与 `triage_cached` 的 docstring（"流水线与脚本都走这个函数"）矛盾。
+    这里用假 agent / 假客户端 / 假 scan_file 把 CLI 表面跑通，断言它真被传下去。
+    """
+    from typer.testing import CliRunner
+
+    from aiav import cli
+    from aiav import triage as T
+    from aiav.models import FileReport
+
+    seen: dict = {}
+
+    class _FakeTriageClient:
+        def __init__(self, model=None, base_url=None):
+            self.model = model or "fake-flash"
+
+    def fake_scan_file(path, **kw):
+        seen.clear()
+        seen.update(kw)
+        return FileReport(path=str(path), sha256="a" * 64, size=1, extension=".exe",
+                          prefilter_score=0, deterministic={"triage": {"enabled": True}},
+                          verdict=Verdict(risk=RiskLevel.clean, confidence=0.9,
+                                          category="clean", summary="x"))
+
+    monkeypatch.setattr(cli, "build_agent", lambda **kw: object())
+    monkeypatch.setattr(T, "TriageClient", _FakeTriageClient)
+    monkeypatch.setattr(cli, "scan_file", fake_scan_file)
+    monkeypatch.setattr(cli, "clamav_scan_batch",
+                        lambda *a, **k: {"available": False, "error": "测试桩"})
+    monkeypatch.setenv("AI_AV_CACHE", "1")
+    monkeypatch.setenv("AI_AV_STATE_DIR", str(tmp_path / "state"))
+
+    sample = tmp_path / "x.exe"
+    sample.write_bytes(b"MZ" + b"\x00" * 32)
+
+    result = CliRunner().invoke(cli.app, ["scan", str(sample), "--triage",
+                                          "--no-history", "-o", str(tmp_path / "reports")])
+    assert result.exit_code == 0, result.output
+    assert seen.get("triage_enabled") is True
+    assert seen.get("triage_client") is not None
+    assert seen.get("triage_cache") is not None, "主扫描没把 TriageCache 传下去"
+
+    # AI_AV_CACHE=0 时不许建缓存（与 ScanCache 同一个开关）
+    seen.clear()
+    monkeypatch.setenv("AI_AV_CACHE", "0")
+    result = CliRunner().invoke(cli.app, ["scan", str(sample), "--triage",
+                                          "--no-history", "-o", str(tmp_path / "reports2")])
+    assert result.exit_code == 0, result.output
+    assert seen.get("triage_cache") is None

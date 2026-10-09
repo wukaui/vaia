@@ -284,8 +284,10 @@ def build_agent(
         provider=OpenAIProvider(base_url=base_url, api_key=api_key, http_client=http_client),
     )
 
-    # 推理模型的思考 token 也算在 max_tokens 里，2000 容易被截断
-    max_tokens = int(os.getenv("AGENT_MAX_TOKENS", "3000"))
+    # 推理模型的思考 token 也算在 max_tokens 里：默认给 16000，别用 3000。
+    # README 自己点名过这个默认值 —— 3000 会把推理预算挤爆 → 模型零输出 →
+    # 静默降级到规则判定（2026-10-08 修：默认值与 README 的"必须 ≥16000"对齐）。
+    max_tokens = int(os.getenv("AGENT_MAX_TOKENS", "16000"))
 
     agent = Agent(
         model,

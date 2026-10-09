@@ -282,3 +282,39 @@ def test_report_head_keeps_baseline_numbers_when_low_gate_off(tmp_path) -> None:
     assert s["sent_high"] == 1 and s["sent_low"] == 0
     _json, html, _audit = write_reports(reports, tmp_path / "out")
     assert "低档已关闭" in html.read_text(encoding="utf-8")
+
+
+def test_low_tier_degraded_note_renders(tmp_path) -> None:
+    """低档里有文件降级到规则时，抬头要写出「降级到规则 N 个」。
+
+    回归（2026-10-09 外部核对发现）：这段原来是 f-string 里再嵌 f-string 且引号相同，
+    用的是 PEP 701 语法（Python 3.12+），而 pyproject 声明 requires-python >=3.11。
+    后果是 3.11 下 `import aiav.report` 直接 SyntaxError，HTML 报告整块不可用。
+    已改成「先算变量再插值」；这条测试同时守住「降级不为 0 要写出来」这个口径。
+    """
+    from aiav.models import FileReport
+    from aiav.report import build_summary, write_reports
+
+    def rep(score: int, tier: str, degraded: bool) -> FileReport:
+        return FileReport(
+            path=f"/x/{score}-{tier}-{degraded}.exe", sha256=f"{score:064d}"[:64], size=1,
+            extension=".exe", prefilter_score=score,
+            deterministic={"disposition": "send_ai", "tier": "weak",
+                           "band": "suspicious", "band_label": "可疑", "score": score,
+                           "sends_to_ai": True, "reasons": [],
+                           "gate": 300, "gate_low": 225, "ai_tier": tier},
+            verdict=Verdict(risk=RiskLevel.clean, confidence=0.5, category="test", summary="x"),
+            agent_used=True,
+            agent_retry={"outcome": "degraded_to_rules"} if degraded else {},
+        )
+
+    reports = [rep(425, "high", False), rep(275, "low", True)]
+    s = build_summary(reports)["deterministic"]
+    assert s["low_tier"]["degraded"] == 1
+    _json, html, _audit = write_reports(reports, tmp_path / "out")
+    assert "降级到规则 1 个" in html.read_text(encoding="utf-8")
+
+    # 没有降级文件时，这句抬头注不该出现（页面上另有一张同名的统计卡，所以按整句匹配）
+    _json, html2, _audit = write_reports(
+        [rep(425, "high", False), rep(275, "low", False)], tmp_path / "out2")
+    assert "降级到规则 1 个" not in html2.read_text(encoding="utf-8")
